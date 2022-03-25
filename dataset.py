@@ -1,15 +1,77 @@
 from torch.utils.data import Dataset
+from scripts.knowledge_reader import KnowledgeReader
 import random
+import torch
+
+class KnowledgeBase(KnowledgeReader):
+    def __init__(self, dataroot, knowledge_file):
+        super(KnowledgeBase, self).__init__(dataroot, knowledge_file)
+        self.list_docs = [{'domain':doc['domain'],
+                           'entity_id':doc['entity_id'],
+                           'doc_id':doc['doc_id']}
+                           for doc in self.get_doc_list()]
+
+    def __getitem__(self, item):
+        if type(item) is int:
+
+            if item < 0 or item >= len(self.list_docs):
+                raise ValueError("index out of bounds: %d" % item)
+
+            item = self.list_docs[item]
+
+        res = self.get_doc(**item)
+        return (res['domain'], res['entity_name'], *res['doc'].values())
+
+
+class VectorizedKnowledgeBase(KnowledgeBase):
+    def __init__(self, encoder, *args):
+        super(VectorizedKnowledgeBase, self).__init__(*args)
+        self.encoder = encoder
+        self.vectorized_knowledge = self.vectorize()
+
+    def vectorize(self):
+        vectors = []
+        for doc_ids in self.list_docs:
+            doc = self.__getitem__(doc_ids)
+            vectors.append(self.encoder(doc))
+
+        return torch.cat(vectors)
+
+class CLSExtractor():
+    def __call__(self, out):
+        return out.last_hidden_state[0][0]
+
+class Encoder():
+    def __init__(self, model, tokenizer, preprocessing_transform=None, postprocessing_transform=None):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.preprocessing_transform = preprocessing_transform
+        self.postprocessing_transform = postprocessing_transform
+
+    def __call__(self, item):
+        if self.preprocessing_transform is not None:
+            x = self.preprocessing_transform(item)
+
+        x = self.tokenizer(x, return_tensors='pt')
+        x = self.model(**x)
+
+        if self.postprocessing_transform is not None:
+            x = self.postprocessing_transform(x)
+
+        return x
+
+
+
 
 
 class DSTCDataset(Dataset):
-    def __init__(self, dataset_walker, knowledge_walker, data_transform=None, target_transform=None):
+    def __init__(self, dataset_walker, knowledge_walker, sampling_method='document', data_transform=None, target_transform=None):
         self.data = []
         self.labels = []
         self.knowledge_walker = knowledge_walker
         self.data_transform = data_transform
         self.target_transform = target_transform
-        self.sampling_method = 'domain'#self.set_sampling_method('domain')
+        self.sampling_method = sampling_method
 
         for dialog_context, label in dataset_walker:
             if label is None:
@@ -31,13 +93,25 @@ class DSTCDataset(Dataset):
         return random.choice(domains)
 
 
-    def __get_random_entity(self, domain, entity_to_exclude=None):
+    def __get_random_entity(self, domain=None, entity_to_exclude=None):
+        if domain is None:
+            domain = self.__get_random_domain()
+
         entities = self.knowledge_walker.get_entity_list(domain)
         try:
             entities.remove(entity_to_exclude)
         except:
             pass
         return random.choice(entities)
+
+    # def get_document(self, domain=None, entity_id=None, doc_id=None, domain_to_exclude=None, entity_to_exclude=None, document_to_exclude=None):
+    #     if domain is None:
+    #         domain = self.__get_random_domain(domain_to_exclude=domain_to_exclude)
+    #
+    #         if entity_id is None:
+    #             entity_id = self.__get_random_entity(domain)
+    #
+    #             if doc_id is None:
 
 
     def __get_random_document(self, domain, entity, document_to_exclude=None):
@@ -76,8 +150,8 @@ class DSTCDataset(Dataset):
                 pos_sample = (domain, entity_name)
             elif self.sampling_method == 'document':
                 neg_doc = self.__get_random_document(domain, entity_id, document_to_exclude=doc_id)['doc']
-                neg_sample = (domain, entity_name, neg_doc)
-                pos_sample = (domain, entity_name, doc)
+                neg_sample = (domain, entity_name, *neg_doc.values())
+                pos_sample = (domain, entity_name, *doc.values())
 
 
             if self.target_transform is not None:
@@ -92,17 +166,19 @@ class DSTCDataset(Dataset):
 
 
 if __name__ == '__main__':
-    from scripts.dataset_walker import DatasetWalker
-    from scripts.knowledge_reader import KnowledgeReader
 
-    dw = DatasetWalker('train', 'DSTC9/data', labels=True)
-    kr = KnowledgeReader("DSTC9/data", "knowledge.json")
-
-
-
-    from transformers import AutoTokenizer
+    from transformers import AutoTokenizer, AutoModel
     tokenizer = AutoTokenizer.from_pretrained('distilroberta-base')
-    ds = DSTCDataset(dw, kr)
-    print(ds[0])
+    model = AutoModel.from_pretrained('distilroberta-base')
 
-    print(ds[1])
+    from main import ConcatenateTarget
+    knowledge_preprocessing = ConcatenateTarget(sep_token=tokenizer.sep_token)
+    knowledge_postprocessing = CLSExtractor()
+
+    encoder = Encoder(model, tokenizer, knowledge_preprocessing, knowledge_postprocessing)
+
+    kb = KnowledgeBase("DSTC9/data", "knowledge.json")
+    encoder(kb[0])
+
+    kb = VectorizedKnowledgeBase(encoder, "DSTC9/data", "knowledge.json")
+    kb.vectorize()
