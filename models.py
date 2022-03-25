@@ -5,20 +5,26 @@ class Encoder():
         self.preprocessing_transform = preprocessing_transform
         self.postprocessing_transform = postprocessing_transform
 
+    #todo implement batches
     def __call__(self, item):
 
         try:
             iter(item)
+            data = item
         except:
-            item = [item]
+            data = [item]
 
         if self.preprocessing_transform is not None:
-            x = [self.preprocessing_transform(val) for val in item]
+        #     x = [self.preprocessing_transform(val) for val in item]
+            data = self.preprocessing_transform(data)
 
-        x = self.tokenizer(x, return_tensors='pt', padding=True, truncation=True)
-        x = self.model(**x)
+
+        tokenized_data = self.tokenizer(data, return_tensors='pt', padding=True, truncation=True)
+        tokenized_data = {key:value.to(self.model.device) for key, value in tokenized_data.items()}
+        out = self.model(**tokenized_data)
+        del tokenized_data, data
 
         if self.postprocessing_transform is not None:
-            x = self.postprocessing_transform(x)
+            out = self.postprocessing_transform(out)
 
-        return x
+        return out
