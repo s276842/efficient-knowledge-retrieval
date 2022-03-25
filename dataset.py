@@ -11,6 +11,7 @@ class KnowledgeBase(KnowledgeReader):
                            'doc_id':doc['doc_id']}
                            for doc in self.get_doc_list()]
 
+
     def __getitem__(self, item):
         if type(item) is int:
 
@@ -20,46 +21,21 @@ class KnowledgeBase(KnowledgeReader):
             item = self.list_docs[item]
 
         res = self.get_doc(**item)
-        return (res['domain'], res['entity_name'], *res['doc'].values())
+        domain = res['domain']
+        entity_name = res['entity_name']
+        doc = res['doc']
+        return domain, entity_name, *doc.values()
 
 
 class VectorizedKnowledgeBase(KnowledgeBase):
     def __init__(self, encoder, *args):
         super(VectorizedKnowledgeBase, self).__init__(*args)
         self.encoder = encoder
-        self.vectorized_knowledge = self.vectorize()
+        self.vectorize()
 
     def vectorize(self):
-        vectors = []
-        for doc_ids in self.list_docs:
-            doc = self.__getitem__(doc_ids)
-            vectors.append(self.encoder(doc))
-
-        return torch.cat(vectors)
-
-class CLSExtractor():
-    def __call__(self, out):
-        return out.last_hidden_state[0][0]
-
-class Encoder():
-    def __init__(self, model, tokenizer, preprocessing_transform=None, postprocessing_transform=None):
-        self.model = model
-        self.tokenizer = tokenizer
-        self.preprocessing_transform = preprocessing_transform
-        self.postprocessing_transform = postprocessing_transform
-
-    def __call__(self, item):
-        if self.preprocessing_transform is not None:
-            x = self.preprocessing_transform(item)
-
-        x = self.tokenizer(x, return_tensors='pt')
-        x = self.model(**x)
-
-        if self.postprocessing_transform is not None:
-            x = self.postprocessing_transform(x)
-
-        return x
-
+        self.knowledge_vectors = [self.__getitem__(doc_ids) for doc_ids in self.list_docs[:10]]
+        self.knowledge_vectors = self.encoder(self.knowledge_vectors)
 
 
 
@@ -171,14 +147,13 @@ if __name__ == '__main__':
     tokenizer = AutoTokenizer.from_pretrained('distilroberta-base')
     model = AutoModel.from_pretrained('distilroberta-base')
 
-    from main import ConcatenateTarget
-    knowledge_preprocessing = ConcatenateTarget(sep_token=tokenizer.sep_token)
+    from transforms import ConcatenateKnowledge, CLSExtractor
+    knowledge_preprocessing = ConcatenateKnowledge(sep_token=tokenizer.sep_token)
     knowledge_postprocessing = CLSExtractor()
 
+    from models import Encoder
     encoder = Encoder(model, tokenizer, knowledge_preprocessing, knowledge_postprocessing)
 
-    kb = KnowledgeBase("DSTC9/data", "knowledge.json")
-    encoder(kb[0])
 
     kb = VectorizedKnowledgeBase(encoder, "DSTC9/data", "knowledge.json")
     kb.vectorize()
