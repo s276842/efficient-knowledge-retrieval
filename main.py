@@ -3,9 +3,33 @@ from torch.utils.data import DataLoader
 from models import Encoder
 from transforms import ConcatenateKnowledge, CLSExtractor
 from dataset import VectorizedKnowledgeBase, KnowledgeBase
+import torch
+
+def load_knowledge_base(dataroot, knowledge_file, vectorized_knowledge_path=None):
+    r = {'k_base': KnowledgeBase(dataroot, knowledge_file)} #"DSTC9/data", "knowledge.json"
+    if vectorized_knowledge_path is not None:
+        r['vectorized_k_base'] = torch.load(vectorized_knowledge_path)
+
+    return r
+
+def vectorize_knowledge_base(k_base, encoder, store_to=None):
+    k_vectors = torch.cat([encoder(val) for val in k_base[:10]])
+    if store_to is not None:
+        torch.save(k_vectors, store_to)
+    return k_vectors
 
 
 if __name__ == '__main__':
+
+    #load models
+
+    #if vectorize_knowledge:
+    #   k_base = loadkbase
+    #   vectors = vectorize_knowledge_base()
+    #elif load_kbase:
+    #   k_base, vectors = loadkbase
+
+
     from transformers import AutoTokenizer, AutoModel
     import torch
     tokenizer = AutoTokenizer.from_pretrained('distilroberta-base')
