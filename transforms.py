@@ -31,7 +31,7 @@ class ConcatenateKnowledge:
             x.append(domain)
             x.append(self.sep_token)
 
-        if self.add_entity_name:
+        if self.add_entity_name and entity_name is not None: #None to consider enity_id '*'
             x.append(entity_name)
             x.append(self.sep_token)
 
@@ -41,13 +41,18 @@ class ConcatenateKnowledge:
                 x.append(self.sep_token)
 
             x.append(answer)
-
-        return ' '.join(x)
+        try:
+            return ' '.join(x)
+        except:
+            pass
 
 
 class ConcatenateDialogContext:
-    def __init__(self, user_special_token='', agent_special_token = ''):
+    def __init__(self, user_special_token='', agent_special_token = '', reverse=False, limit=None):
         self.speaker_special_tokens = {'U': user_special_token, 'S':agent_special_token}
+        self.revers = reverse
+        self.limit = limit
+        self.f = lambda utterance: (self.speaker_special_tokens[utterance['speaker']], utterance['text'])
 
     def __call__(self, dialog_context):
         # try:
@@ -57,6 +62,32 @@ class ConcatenateDialogContext:
         #     dialog_context = [item]
 
 
-        f = lambda utterance: (self.speaker_special_tokens[utterance['speaker']], utterance['text'])
-        r = flatmap(f, dialog_context)
+        if self.reverse is False:
+            r = flatmap(self.f, dialog_context[:self.limit])
+        else:
+            r = flatmap(self.f, dialog_context[::-1][:self.limit])
         return ' '.join(r)
+
+
+if __name__ == '__main__':
+    from transformers import AutoTokenizer, AutoModel
+    import torch
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    model_path = 'distilroberta-base'
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    model = AutoModel.from_pretrained(model_path).to(device)
+
+    from models import Encoder
+    from transforms import ConcatenateKnowledge, CLSExtractor, PoolerExtractor
+    from dataset import VectorizedKnowledgeBase, KnowledgeBase
+    import torch
+
+    k_preprocessing = ConcatenateKnowledge(sep_token=tokenizer.sep_token, add_domain=True)
+    k_postprocessing = PoolerExtractor()
+    k_encoder = Encoder(model, tokenizer, k_preprocessing, k_postprocessing)
+    k_base = KnowledgeBase("DSTC9/data", "knowledge.json")
+    k_preprocessing = ConcatenateKnowledge(sep_token=tokenizer.sep_token, add_domain=True, add_entity_name=True)
+    knowledge_docs = [k_preprocessing(doc) for doc in k_base]
+

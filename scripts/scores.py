@@ -117,14 +117,14 @@ class Metric:
                 self._selection_r1 += self._recall_at_k(ref_obj['knowledge'], hyp_obj['knowledge'], 1)
                 self._selection_r5 += self._recall_at_k(ref_obj['knowledge'], hyp_obj['knowledge'], 5)
 
-                self._generation_bleu1 += self._bleu(ref_obj['response'], hyp_obj['response'], 1)
-                self._generation_bleu2 += self._bleu(ref_obj['response'], hyp_obj['response'], 2)
-                self._generation_bleu3 += self._bleu(ref_obj['response'], hyp_obj['response'], 3)
-                self._generation_bleu4 += self._bleu(ref_obj['response'], hyp_obj['response'], 4)
-                self._generation_meteor += self._meteor(ref_obj['response'], hyp_obj['response'])
-                self._generation_rouge_l += self._rouge(ref_obj['response'], hyp_obj['response'], 'l')
-                self._generation_rouge_1 += self._rouge(ref_obj['response'], hyp_obj['response'], 1)
-                self._generation_rouge_2 += self._rouge(ref_obj['response'], hyp_obj['response'], 2)                                                             
+                # self._generation_bleu1 += self._bleu(ref_obj['response'], hyp_obj['response'], 1)
+                # self._generation_bleu2 += self._bleu(ref_obj['response'], hyp_obj['response'], 2)
+                # self._generation_bleu3 += self._bleu(ref_obj['response'], hyp_obj['response'], 3)
+                # self._generation_bleu4 += self._bleu(ref_obj['response'], hyp_obj['response'], 4)
+                # self._generation_meteor += self._meteor(ref_obj['response'], hyp_obj['response'])
+                # self._generation_rouge_l += self._rouge(ref_obj['response'], hyp_obj['response'], 'l')
+                # self._generation_rouge_1 += self._rouge(ref_obj['response'], hyp_obj['response'], 1)
+                # self._generation_rouge_2 += self._rouge(ref_obj['response'], hyp_obj['response'], 2)
             else:
                 self._detection_fn += 1
         else:
@@ -158,14 +158,14 @@ class Metric:
         selection_r1_p, selection_r1_r, selection_r1_f = self._compute(self._selection_r1)
         selection_r5_p, selection_r5_r, selection_r5_f = self._compute(self._selection_r5)
 
-        generation_bleu1_p, generation_bleu1_r, generation_bleu1_f = self._compute(self._generation_bleu1)
-        generation_bleu2_p, generation_bleu2_r, generation_bleu2_f = self._compute(self._generation_bleu2)
-        generation_bleu3_p, generation_bleu3_r, generation_bleu3_f = self._compute(self._generation_bleu3)
-        generation_bleu4_p, generation_bleu4_r, generation_bleu4_f = self._compute(self._generation_bleu4)
-        generation_meteor_p, generation_meteor_r, generation_meteor_f = self._compute(self._generation_meteor)
-        generation_rouge_l_p, generation_rouge_l_r, generation_rouge_l_f = self._compute(self._generation_rouge_l)
-        generation_rouge_1_p, generation_rouge_1_r, generation_rouge_1_f = self._compute(self._generation_rouge_1)
-        generation_rouge_2_p, generation_rouge_2_r, generation_rouge_2_f = self._compute(self._generation_rouge_2)
+        # generation_bleu1_p, generation_bleu1_r, generation_bleu1_f = self._compute(self._generation_bleu1)
+        # generation_bleu2_p, generation_bleu2_r, generation_bleu2_f = self._compute(self._generation_bleu2)
+        # generation_bleu3_p, generation_bleu3_r, generation_bleu3_f = self._compute(self._generation_bleu3)
+        # generation_bleu4_p, generation_bleu4_r, generation_bleu4_f = self._compute(self._generation_bleu4)
+        # generation_meteor_p, generation_meteor_r, generation_meteor_f = self._compute(self._generation_meteor)
+        # generation_rouge_l_p, generation_rouge_l_r, generation_rouge_l_f = self._compute(self._generation_rouge_l)
+        # generation_rouge_1_p, generation_rouge_1_r, generation_rouge_1_f = self._compute(self._generation_rouge_1)
+        # generation_rouge_2_p, generation_rouge_2_r, generation_rouge_2_f = self._compute(self._generation_rouge_2)
 
         scores = {
             'detection': {
@@ -178,16 +178,16 @@ class Metric:
                 'r@1': selection_r1_f,
                 'r@5': selection_r5_f,
             },
-            'generation': {
-                'bleu-1': generation_bleu1_f,
-                'bleu-2': generation_bleu2_f,
-                'bleu-3': generation_bleu3_f,
-                'bleu-4': generation_bleu4_f,
-                'meteor': generation_meteor_f,
-                'rouge_1': generation_rouge_1_f,
-                'rouge_2': generation_rouge_2_f,
-                'rouge_l': generation_rouge_l_f
-            }
+            # 'generation': {
+            #     'bleu-1': generation_bleu1_f,
+            #     'bleu-2': generation_bleu2_f,
+            #     'bleu-3': generation_bleu3_f,
+            #     'bleu-4': generation_bleu4_f,
+            #     'meteor': generation_meteor_f,
+            #     'rouge_1': generation_rouge_1_f,
+            #     'rouge_2': generation_rouge_2_f,
+            #     'rouge_l': generation_rouge_l_f
+            # }
         }
 
         return scores
