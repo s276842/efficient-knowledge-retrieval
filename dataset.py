@@ -1,36 +1,104 @@
+import os.path
+
 from torch.utils.data import Dataset
 from scripts.knowledge_reader import KnowledgeReader
 from scripts.dataset_walker import DatasetWalker
 import random
 import torch
+import json
+from bisect import bisect
+from collections.abc import Iterable
+from transforms import ConcatenateDialogContext, ConcatenateKnowledge
+EMPTY_DOC = {'domain':'', 'entity_id':'', 'doc_id':''}
+EMPTY_RESPONSE = ''
 
-#todo cambiare transforms
-class KnowledgeBase(KnowledgeReader):
-    def __init__(self, dataroot, knowledge_file):
-        super(KnowledgeBase, self).__init__(dataroot, knowledge_file)
-        self.doc_list = [{'domain':doc['domain'],
-                           'entity_id':doc['entity_id'],
-                           'doc_id':doc['doc_id']}
-                           for doc in self.get_doc_list()]
+class KnowledgeBase:
+
+    def __init__(self, knowledge_file='knowledge.json'):
+        # load knowledge database as dictionary
+        with open(knowledge_file, 'r') as f:
+            self.knowledge = json.load(f)
+
+        #
+        self.domains = list(self.knowledge)
+        self.entity_ids = [list(self.knowledge[domain]) for domain in self.domains]
+        self.doc_ids = [[list(self.knowledge[domain][entity_id]['docs']) for entity_id in self.knowledge[domain]] for domain in self.domains]
+
+
+        # iterate through the database and compute index span range for each domain and entity
+        n_domains = len(self.knowledge)
+        self.range_domain_docs = [0] * (n_domains+1)
+        self.range_entity_docs = []
+
+        for i, domain in enumerate(self.knowledge):
+            self.range_domain_docs[i+1] = self.range_domain_docs[i]
+            n_entities = len(self.knowledge[domain])
+            self.range_entity_docs.append([self.range_domain_docs[i]] * (n_entities+1))
+
+            for j, entity_id in enumerate(self.knowledge[domain]):
+                self.range_entity_docs[i][j+1] = self.range_entity_docs[i][j]
+                n_docs = len(self.knowledge[domain][entity_id]['docs'])
+                self.range_domain_docs[i+1] += n_docs
+                self.range_entity_docs[i][j+1] += n_docs
+
+        self.len = self.range_domain_docs[-1]
 
     def __len__(self):
-        return len(self.doc_list)
+        return self.len
+
+    def int_to_data(self, index):
+        domain_ind = bisect(self.range_domain_docs, index) - 1
+        domain = self.domains[domain_ind]
+        entity_id_ind = bisect(self.range_entity_docs[domain_ind], index) - 1
+        entity_id = int(self.entity_ids[domain_ind][entity_id_ind])
+        doc_ind = index - self.range_entity_docs[domain_ind][entity_id_ind]
+        doc_id = int(self.doc_ids[domain_ind][entity_id_ind][doc_ind])
+
+        return {'domain': domain, 'entity_id': entity_id, 'doc_id': doc_id}
 
     def __getitem__(self, item):
-        if type(item) is int:
-            if item < 0 or item >= len(self.doc_list):
-                raise ValueError("index out of bounds: %d" % item)
+        if isinstance(item, int):
+            if item < 0:
+                item += self.len
+            if item < 0 or item >= self.len:
+                raise IndexError(f'Index out of bound: {item}')
+            else:
+                keys = self.int_to_data(item)
 
-            item = self.doc_list[item]
         elif isinstance(item, slice):
-            # Get the start, stop, and step from the slice
             return [self[ii] for ii in range(*item.indices(len(self)))]
-        res = self.get_doc(**item)
-        return res
+
+        elif isinstance(item, list):
+            if all(isinstance(x, str) for x in item):
+                if len(item) == 1:
+                    return self.knowledge[item[0]]
+
+            return [self[ii] for ii in item]
+
+        elif isinstance(item, str):
+            return self.knowledge[item]
+        else:
+            raise ValueError
+
+        return self.getdoc(**keys)
+
+    def getdoc(self, domain, entity_id, doc_id):
+        tmp = self.knowledge[domain][str(entity_id)]
+        entity_name = tmp['name']
+        question, answer = tmp['docs'][str(doc_id)].values()
+        entity_id = int(entity_id) if entity_id != '*' else entity_id
+        doc_id = int(doc_id)
+        return {'domain': domain,
+                'entity_id': entity_id,
+                'entity': entity_name,
+                'doc_id': doc_id,
+                'question': question,
+                'answer': answer}
 
     def __iter__(self):
-        for item in self.doc_list:
-            yield self.__getitem__(item)
+        for i in range(self.len):
+            yield self.__getitem__(i)
+
 
 
 
@@ -43,184 +111,129 @@ class VectorizedKnowledgeBase(KnowledgeBase):
     def vectorize(self):
         self.knowledge_vectors = torch.cat([self.encoder(self.__getitem__(doc_ids)) for doc_ids in self.doc_list[:10]])
 
+# class SelectionDialogContextDataset(DialogContextDataset):
+#     def __init__(self, log_file_path, label_file_path=None, data_transform=None):
+#         super(SelectionDialogContextDataset, self).__init__(log_file_path, label_file_path, data_transform)
 
 
-class DSTCDataset(DatasetWalker, Dataset):
-    def __init__(self, dataset, dataroot, knowledge_base, labels=False, labels_file=None, encoder=None):
-        super(DSTCDataset, self).__init__(dataset, dataroot, labels, labels_file)
-        self.encoder = encoder
-        self.knowledge_base = knowledge_base
+class DialogContext:
+    def __init__(self, log_file_path, label_file_path=None, knowledge_seeking_turns_only=False):
 
-        if self.labels is not None:
-            self.ids = [idx for idx, val in enumerate(iter(self)) if val[1]['target'] is True]
+        with open(log_file_path, 'r') as f:
+            self.logs = json.load(f)
 
-        # knowledge_labels = []
-        # logs = []
-        # for dialog_context, label in iter(self):
-        #     if labels is False:
-        #         logs.append(dialog_context)
-        #     else:
-        #         if label['target'] is True:
-        #             knowledge_labels.append(label['knowledge'][0])
-        #             logs.append(dialog_context)
-        #
-        # self.logs = logs
-        # self.labels = knowledge_labels
+        self.labels = None
+
+        if label_file_path is not None:
+            with open(label_file_path, 'r') as f:
+                self.labels = json.load(f)
+
+        if knowledge_seeking_turns_only:
+            self.__filter_turns()
+
+
+    def __filter_turns(self):
+        # filter selection turns only
+        only_selection_dialogs = []
+        only_selection_labels = []
+        for dialog_context, label in zip(self.logs, self.labels):
+            if label['target'] == True:
+                only_selection_dialogs.append(dialog_context)
+
+                label = label['knowledge'][0]
+                label['entity_id'] = str(label['entity_id'])
+                label['doc_id'] = str(label['doc_id'])
+                only_selection_labels.append(label)
+
+        self.logs = only_selection_dialogs
+        self.labels = only_selection_labels
 
     def __len__(self):
-        return len(self.logs)
+        return len(self.labels)
 
-    def __getitem__(self, idx):
-        if self.labels is not None:
-            i = self.ids[idx]
-        else:
-            i = idx
+    def __getitem__(self, item):
+        if isinstance(item, int):
+            data = self.logs[item]
+            label = None
 
-        data = self.logs[i]
+            if self.labels is not None:
+                label = self.labels[item]
 
-        if self.encoder is not None:
-            data = self.encoder(data)
+        elif isinstance(item, slice):
+            return [self[ii] for ii in range(*item.indices(len(self)))]
 
-        if len(self.labels) > 0:
-            label = self.labels[i]['knowledge']
-            return (data, label)
+        elif isinstance(item, list):
+            return [self[ii] for ii in item]
 
-        else:
-            return (data,)
 
+        return data, label
+
+    def __iter__(self):
+        for i in range(self.__len__()):
+            yield self[i]
+
+
+
+# class SelectionDSTC9Dataset(Dataset):
+#     def __init__(self, k_base, d_base: SelectionDialogContext, data_transform=ConcatenateDialogContext(), target_transform=ConcatenateKnowledge()):
+#         self.k_base = k_base
+#         self.d_data = d_base
 #
-#             domain = label['domain']
-#             entity_id = label['entity_id']
-#             doc_id = label['doc_id']
-#             doc = self.knowledge_walker.get_doc(domain, entity_id, doc_id)
-#             entity_name = doc['entity_name']
-#             doc = doc['doc']
-#
-#             if self.sampling_method == 'domain':
-#                 neg_domain = self.__get_random_domain(domain_to_exclude=doc_id)
-#                 neg_sample = (neg_domain,)
-#                 pos_sample = (domain,)
-#             elif self.sampling_method == 'entity':
-#                 neg_entity = self.__get_random_entity(domain, entity_to_exclude=entity_id)
-#                 neg_entity_name = neg_entity['name']
-#                 neg_sample = (domain, neg_entity_name)
-#                 pos_sample = (domain, entity_name)
-#             elif self.sampling_method == 'document':
-#                 neg_doc = self.__get_random_document(domain, entity_id, document_to_exclude=doc_id)['doc']
-#                 neg_sample = (domain, entity_name, *neg_doc.values())
-#                 pos_sample = (domain, entity_name, *doc.values())
-#
-#
-#             if self.target_transform is not None:
-#                 pos_sample = self.target_transform(pos_sample)
-#                 neg_sample = self.target_transform(neg_sample)
-#
-#             return (anchor, pos_sample, neg_sample)
-
-# class DSTCDataset(Dataset):
-#     def __init__(self, dataset_walker, knowledge_walker, sampling_method='document', data_transform=None, target_transform=None):
-#         self.data = []
-#         self.labels = []
-#         self.knowledge_walker = knowledge_walker
 #         self.data_transform = data_transform
 #         self.target_transform = target_transform
-#         self.sampling_method = sampling_method
-#
-#         for dialog_context, label in dataset_walker:
-#             if label is None:
-#                 self.data.append(dialog_context)
-#             else:
-#                 if label['target'] is True:
-#                     self.labels.append(label['knowledge'][0])
-#                     self.data.append(dialog_context)
 #
 #     def __len__(self):
-#         return len(self.data)
+#         len(self.d_data)
 #
-#     def __get_random_domain(self, domain_to_exclude=None):
-#         domains = self.knowledge_walker.get_domain_list()
-#         try:
-#             domains.remove(domain_to_exclude)
-#         except:
-#             pass
-#         return random.choice(domains)
+#     def __getitem__(self, item):
+#         if isinstance(item, int):
+#             data, label = self.d_data[item]
+#             knowledge = self.k_base.getdoc(**label)
 #
-#
-#     def __get_random_entity(self, domain=None, entity_to_exclude=None):
-#         if domain is None:
-#             domain = self.__get_random_domain()
-#
-#         entities = self.knowledge_walker.get_entity_list(domain)
-#         try:
-#             entities.remove(entity_to_exclude)
-#         except:
-#             pass
-#         return random.choice(entities)
-#
-#     # def get_document(self, domain=None, entity_id=None, doc_id=None, domain_to_exclude=None, entity_to_exclude=None, document_to_exclude=None):
-#     #     if domain is None:
-#     #         domain = self.__get_random_domain(domain_to_exclude=domain_to_exclude)
-#     #
-#     #         if entity_id is None:
-#     #             entity_id = self.__get_random_entity(domain)
-#     #
-#     #             if doc_id is None:
-#
-#
-#     def __get_random_document(self, domain, entity, document_to_exclude=None):
-#         documents = self.knowledge_walker.get_doc_list(domain, entity)
-#         doc = random.choice(documents)
-#         while doc['doc_id'] == document_to_exclude:
-#             doc = random.choice(documents)
-#         return doc
-#
-#
-#     def __getitem__(self, idx):
-#
-#         anchor = self.data[idx]
-#
-#         if self.data_transform is not None:
-#             anchor = self.data_transform(anchor)
-#
-#         if len(self.labels) > 0:
-#             label = self.labels[idx]
-#
-#             domain = label['domain']
-#             entity_id = label['entity_id']
-#             doc_id = label['doc_id']
-#             doc = self.knowledge_walker.get_doc(domain, entity_id, doc_id)
-#             entity_name = doc['entity_name']
-#             doc = doc['doc']
-#
-#             if self.sampling_method == 'domain':
-#                 neg_domain = self.__get_random_domain(domain_to_exclude=doc_id)
-#                 neg_sample = (neg_domain,)
-#                 pos_sample = (domain,)
-#             elif self.sampling_method == 'entity':
-#                 neg_entity = self.__get_random_entity(domain, entity_to_exclude=entity_id)
-#                 neg_entity_name = neg_entity['name']
-#                 neg_sample = (domain, neg_entity_name)
-#                 pos_sample = (domain, entity_name)
-#             elif self.sampling_method == 'document':
-#                 neg_doc = self.__get_random_document(domain, entity_id, document_to_exclude=doc_id)['doc']
-#                 neg_sample = (domain, entity_name, *neg_doc.values())
-#                 pos_sample = (domain, entity_name, *doc.values())
-#
+#             if self.data_transform is not None:
+#                 data = self.data_transform(data)
 #
 #             if self.target_transform is not None:
-#                 pos_sample = self.target_transform(pos_sample)
-#                 neg_sample = self.target_transform(neg_sample)
+#                 knowledge = self.target_transform(knowledge)
 #
-#             return (anchor, pos_sample, neg_sample)
-#
-#
-#     def set_sampling_method(self, sampling_method):
-#         self.sampling_method = sampling_method
+#         return data, knowledge, label
+
+
+class TripletSelectionDSTC9Dataset(Dataset):
+
+    def __getitem__(self, item):
+        anchor, pos, label = super(TripletSelectionDSTC9Dataset, self).__getitem__(item)
+
+        domain, entity_id, doc_id = label.values()
+
+        # sample neg
+        # if self.target_transform is not None:
+        #   neg = self.target_transform(neg)
+        # return anchor, pos, neg, label
 
 
 if __name__ == '__main__':
+    import json
+    from torch.utils.data import DataLoader
+    log_file_path = './DSTC9/data/train/logs.json'
+    label_file_path = './DSTC9/data/train/labels.json'
+    d = DialogContext(log_file_path, label_file_path)
+    k = KnowledgeBase('DSTC9/data/knowledge.json')
 
-    d_train_dataset = DSTCDataset('train', 'DSTC9/data/', labels=True)
+    d_dataset = SelectionDSTC9Dataset(d_base=d,k_base=k)
+    d_dataset[0]
+    d_dataloader = DataLoader(d_dataset, batch_size=8, shuffle=True)
+
+    for batch in d_dataloader:
+        print([k.getdoc(d,e,k2) for d,e,k2 in zip(*batch[1].values())])
+        break
+
+    # k.getdoc(batch[2], batch[3], batch[4])
+    # import time
+    # start = time.time()
+    # print([k[:10] for _ in range(100000)])
+    # print(time.time() - start)
+    # d_train_dataset = DSTCDataset('train', 'DSTC9/data/', labels=True)
 
     # from transformers import AutoTokenizer, AutoModel
     # tokenizer = AutoTokenizer.from_pretrained('distilroberta-base')
