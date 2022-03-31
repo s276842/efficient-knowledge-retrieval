@@ -1,12 +1,48 @@
+import json
+import time
+
+from models import BaseTransformerEncoder
+from dataset import DialogContext
+from torch.utils.data import DataLoader
+
+
+
+def main():
+
+    k_vectors = torch.load(knowledge_vectors_path)
+
+    d_data = DialogContext(log_file_path, label_file_path)
+    d_dataloader = DataLoader(d_data, batch_size)
+
+    d_encoder = BaseTransformerEncoder(model_path, outputlayer, device)
+
+    s_model = ScoreModel()
+
+    res = {}
+    total_selection_time = .0
+    k = 0
+    with torch.no_grad():
+        for data, label in d_dataloader:
+            if label['target'] == False:
+                res.append(label)
+            else:
+                k+=1
+                start_selection_time = time.time()
+                e_data = d_encoder(data)
+                k_index = s_model(e_data, k_vectors)
+                k_docs = [k_base[ind] for ind in k_index]
+
+                total_selection_time += time.time() - start_selection_time
+                res.append()
+
+        return res, total_selection_time, total_selection_time/k
+
+
 
 
 if __name__ == '__main__':
-    from transformers import AutoTokenizer, AutoModel
-    import torch
-
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-    model_path = 'sentence-transformers/all-mpnet-base-v2'
+    #--device        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    #--model_path = 'sentence-transformers/all-mpnet-base-v2'
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     model = AutoModel.from_pretrained(model_path).to(device)
 

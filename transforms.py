@@ -23,8 +23,8 @@ class ConcatenateKnowledge:
     def __call__(self, target):
         domain = target['domain']
         entity_name = target['entity_name']
-        doc = target['doc']
-        question, answer = doc['title'], doc['body']
+        question = target['question']
+        answer = target['answer']
 
         x = []
         if self.add_domain:

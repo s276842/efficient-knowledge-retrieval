@@ -12,9 +12,12 @@ from transforms import ConcatenateDialogContext, ConcatenateKnowledge
 EMPTY_DOC = {'domain':'', 'entity_id':'', 'doc_id':''}
 EMPTY_RESPONSE = ''
 
+
+
 class KnowledgeBase:
 
     def __init__(self, knowledge_file='knowledge.json'):
+
         # load knowledge database as dictionary
         with open(knowledge_file, 'r') as f:
             self.knowledge = json.load(f)
@@ -23,7 +26,6 @@ class KnowledgeBase:
         self.domains = list(self.knowledge)
         self.entity_ids = [list(self.knowledge[domain]) for domain in self.domains]
         self.doc_ids = [[list(self.knowledge[domain][entity_id]['docs']) for entity_id in self.knowledge[domain]] for domain in self.domains]
-
 
         # iterate through the database and compute index span range for each domain and entity
         n_domains = len(self.knowledge)
@@ -90,7 +92,7 @@ class KnowledgeBase:
         doc_id = int(doc_id)
         return {'domain': domain,
                 'entity_id': entity_id,
-                'entity': entity_name,
+                'entity_name': entity_name,
                 'doc_id': doc_id,
                 'question': question,
                 'answer': answer}
@@ -98,25 +100,20 @@ class KnowledgeBase:
     def __iter__(self):
         for i in range(self.len):
             yield self.__getitem__(i)
-
-
-
-
-class VectorizedKnowledgeBase(KnowledgeBase):
-    def __init__(self, encoder, *args):
-        super(VectorizedKnowledgeBase, self).__init__(*args)
-        self.encoder = encoder
-        self.vectorize()
-
-    def vectorize(self):
-        self.knowledge_vectors = torch.cat([self.encoder(self.__getitem__(doc_ids)) for doc_ids in self.doc_list[:10]])
-
+# class VectorizedKnowledgeBase(KnowledgeBase):
+#     def __init__(self, encoder, *args):
+#         super(VectorizedKnowledgeBase, self).__init__(*args)
+#         self.encoder = encoder
+#         self.vectorize()
+#
+#     def vectorize(self):
+#         self.knowledge_vectors = torch.cat([self.encoder(self.__getitem__(doc_ids)) for doc_ids in self.doc_list[:10]])
 # class SelectionDialogContextDataset(DialogContextDataset):
 #     def __init__(self, log_file_path, label_file_path=None, data_transform=None):
 #         super(SelectionDialogContextDataset, self).__init__(log_file_path, label_file_path, data_transform)
 
-
 class DialogContext:
+
     def __init__(self, log_file_path, label_file_path=None, knowledge_seeking_turns_only=False):
 
         with open(log_file_path, 'r') as f:
