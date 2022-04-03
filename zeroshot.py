@@ -1,91 +1,75 @@
 import json
 import time
-
-from models import BaseTransformerEncoder
+from tqdm import tqdm
+from models import BaseTransformerEncoder, DenseRetriever, Cosine, DotProd, Euclidean
 from dataset import DialogContext
-from torch.utils.data import DataLoader
+import torch
+import os
+import models
+import transforms
 
+def main(dataroot, dataset, device, output_path, config):
 
+    # data
+    log_file = config['DATA']['log_file']
+    label_file = config['DATA']['label_file']
+    log_file_path = os.path.join(dataroot, dataset, log_file)
+    label_file_path = os.path.join(dataroot, dataset, label_file)
+    v_knowledge_file = os.path.join(dataroot, config['DATA']['vectorized_knowledge_file'])
 
-def main():
+    # dialog
+    data_transform_cls = getattr(transforms, config['DIALOG']['data_transform'])
+    reverse = config.getboolean('DIALOG', 'reverse')
+    limit = config.getint('DIALOG', 'limit')
+    d_transform = data_transform_cls(reverse = reverse, limit=limit)
+    d_data = DialogContext(log_file_path, label_file_path, data_transform=d_transform)
 
-    k_vectors = torch.load(knowledge_vectors_path)
+    # model
+    encoder_cls = getattr(models, config['MODEL']['encoder_model'])
+    model_name = config['MODEL']['model_name_or_path']
+    outputlayer = config['MODEL']['outputlayer']
+    d_encoder = encoder_cls(model_name, outputlayer, device)
 
-    d_data = DialogContext(log_file_path, label_file_path)
-    d_dataloader = DataLoader(d_data, batch_size)
+    score_function = config['MODEL']['score_function']
+    if score_function == 'cos':
+        score_function = Cosine()
+    elif score_function == 'dot':
+        score_function = DotProd()
+    elif score_function == 'euclidean':
+        score_function = Euclidean()
 
-    d_encoder = BaseTransformerEncoder(model_path, outputlayer, device)
+    projections = config['MODEL']['matrices'].split('-')
+    s_model = DenseRetriever(v_knowledge_file, score_function, projections=projections, topk=5)
 
-    s_model = ScoreModel()
+    res = []
+    sel_times = []
 
-    res = {}
-    total_selection_time = .0
-    k = 0
     with torch.no_grad():
-        for data, label in d_dataloader:
+        for data, label in tqdm(d_data):
+
+            # non-knowledge-seeking turns
             if label['target'] == False:
                 res.append(label)
+            # knowledge-seeking turns
             else:
-                k+=1
                 start_selection_time = time.time()
                 e_data = d_encoder(data)
-                k_index = s_model(e_data, k_vectors)
-                k_docs = [k_base[ind] for ind in k_index]
+                k_index = s_model(e_data)
+                label['knowledge'] = [{'domain':k[0], 'entity_id':int(k[1]) if k[1] != '*' else k[1], 'doc_id':int(k[2])} for k in k_index]
+                res.append(label)
+                sel_times.append(time.time() - start_selection_time)
+                break
 
-                total_selection_time += time.time() - start_selection_time
-                res.append()
-
-        return res, total_selection_time, total_selection_time/k
+    res = {'pred':res, 'sel_times':sel_times}
+    with open(output_path, 'w') as f: json.dump(res, f)
+    return
 
 
 
 
 if __name__ == '__main__':
-    #--device        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    #--model_path = 'sentence-transformers/all-mpnet-base-v2'
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    model = AutoModel.from_pretrained(model_path).to(device)
+    import configparser
+    config = configparser.ConfigParser()
+    config.read('./conf.ini')
+    main('./DSTC9/data_eval/', 'test', 'cpu', './configurations/zeroshot/prova0.json', config)
 
-    from models import Encoder
-    from transforms import ConcatenateKnowledge, CLSExtractor, PoolerExtractor
-    from dataset import VectorizedKnowledgeBase, KnowledgeBase
-    import torch
-
-    k_preprocessing = ConcatenateKnowledge(sep_token=tokenizer.sep_token, add_domain=True, add_entity_name=True)
-    k_postprocessing = PoolerExtractor()
-    k_encoder = Encoder(model, tokenizer, k_preprocessing, k_postprocessing)
-    k_base = KnowledgeBase("DSTC9/data", "knowledge.json")
-
-    from transforms import ConcatenateDialogContext, PoolerExtractor
-    from dataset import DSTCDataset
-
-    d_preprocessing = ConcatenateDialogContext()
-    d_postprocessing = PoolerExtractor()
-    d_encoder = Encoder(model, tokenizer, d_preprocessing, d_postprocessing)
-    d_train_dataset = DSTCDataset('val', 'DSTC9/data/', knowledge_base=k_base, encoder=d_encoder, labels=True)
-
-    knowledge_vectors_path = 'DSTC9/data/all-mpnet-base-v2-domain-entity-question-answer'
-    k_vectors = torch.load(knowledge_vectors_path)
-
-    res = []
-    from tqdm import tqdm
-
-    with torch.no_grad():
-        for dialog_context, label in tqdm(d_train_dataset):
-            if label['target'] == False:
-                res.append(label)
-            else:
-                r = {'target': True}
-                dialog_context = d_preprocessing(dialog_context)
-
-                dialog_context = tokenizer(dialog_context, return_tensors='pt', truncation=True)['input_ids']
-                dialog_context = model(dialog_context.to(device))
-                dialog_context = d_postprocessing(dialog_context).to('cpu')
-                # scores = d_encoder(dialog_context) @ k_vectors.T
-                scores = dialog_context @ k_vectors.T
-                best_knowledge = scores.topk(5).indices.flatten()
-                best_knowledge = [k_base.doc_list[ind] for ind in best_knowledge]
-                r['knowledge'] = best_knowledge
-                r['response'] = label['response']
-
-                res.append(r)

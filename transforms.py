@@ -50,7 +50,7 @@ class ConcatenateKnowledge:
 class ConcatenateDialogContext:
     def __init__(self, user_special_token='', agent_special_token = '', reverse=False, limit=None):
         self.speaker_special_tokens = {'U': user_special_token, 'S':agent_special_token}
-        self.revers = reverse
+        self.reverse = reverse
         self.limit = limit
         self.f = lambda utterance: (self.speaker_special_tokens[utterance['speaker']], utterance['text'])
 

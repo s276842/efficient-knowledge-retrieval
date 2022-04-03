@@ -52,7 +52,8 @@ class KnowledgeBase:
         domain_ind = bisect(self.range_domain_docs, index) - 1
         domain = self.domains[domain_ind]
         entity_id_ind = bisect(self.range_entity_docs[domain_ind], index) - 1
-        entity_id = int(self.entity_ids[domain_ind][entity_id_ind])
+        entity_id = self.entity_ids[domain_ind][entity_id_ind]
+        entity_id = int(entity_id) if entity_id != '*' else entity_id
         doc_ind = index - self.range_entity_docs[domain_ind][entity_id_ind]
         doc_id = int(self.doc_ids[domain_ind][entity_id_ind][doc_ind])
 
@@ -114,7 +115,7 @@ class KnowledgeBase:
 
 class DialogContext:
 
-    def __init__(self, log_file_path, label_file_path=None, knowledge_seeking_turns_only=False):
+    def __init__(self, log_file_path, label_file_path=None, knowledge_seeking_turns_only=False, data_transform=None):
 
         with open(log_file_path, 'r') as f:
             self.logs = json.load(f)
@@ -128,6 +129,7 @@ class DialogContext:
         if knowledge_seeking_turns_only:
             self.__filter_turns()
 
+        self.data_transform = data_transform
 
     def __filter_turns(self):
         # filter selection turns only
@@ -163,7 +165,7 @@ class DialogContext:
             return [self[ii] for ii in item]
 
 
-        return data, label
+        return self.data_transform(data), label
 
     def __iter__(self):
         for i in range(self.__len__()):

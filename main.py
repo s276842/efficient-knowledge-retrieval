@@ -1,69 +1,41 @@
-from torch.utils.data import DataLoader
+import configparser
 
-from models import Encoder
-from transforms import ConcatenateKnowledge, CLSExtractor
-from dataset import VectorizedKnowledgeBase, KnowledgeBase
 import torch
+import argparse
+import vectorized_knowledge
+import zeroshot
 
-def load_knowledge_base(dataroot, knowledge_file, vectorized_knowledge_path=None):
-    r = {'k_base': KnowledgeBase(dataroot, knowledge_file)} #"DSTC9/data", "knowledge.json"
-    if vectorized_knowledge_path is not None:
-        r['vectorized_k_base'] = torch.load(vectorized_knowledge_path)
+def setup_args():
+    """Setup inference arguments."""
+    parser = argparse.ArgumentParser()
 
-    return r
+    parser.add_argument("--dataroot", type=str, required=True)
+    parser.add_argument("--dataset", type=str, default='val', choices=['test', 'train', 'val'])
+    parser.add_argument("--device", type=str, default='cpu')
+    parser.add_argument("--method", type=str, required=True, choices=['zeroshot'])
+    parser.add_argument("--output_path", type=str, required=True)
+    parser.add_argument('-c', "--conf", type=str, required=True)
 
-def vectorize_knowledge_base(k_base, encoder, store_to=None):
-    k_vectors = torch.cat([encoder(val) for val in k_base[:10]])
-    if store_to is not None:
-        torch.save(k_vectors, store_to)
-    return k_vectors
+
+    parser.add_argument("--log_file_path", type=str, required=True)
+    parser.add_argument("--label_file_path", type=str, required=True)
+
+    args = parser.parse_args()
+    args.load(args.config_path)
+
+    return args
 
 
 if __name__ == '__main__':
+    args = setup_args()
 
-    #load models
+    config = configparser.ConfigParser()
+    config.read(args.conf)
 
-    #if vectorize_knowledge:
-    #   k_base = loadkbase
-    #   vectors = vectorize_knowledge_base()
-    #elif load_kbase:
-    #   k_base, vectors = loadkbase
+    method = args.method
 
-
-    from transformers import AutoTokenizer, AutoModel
-    import torch
-    tokenizer = AutoTokenizer.from_pretrained('distilroberta-base')
-    model = AutoModel.from_pretrained('distilroberta-base')
-
-    #knowledge
-    k_preprocessing = ConcatenateKnowledge(sep_token=tokenizer.sep_token)
-    k_postprocessing = CLSExtractor()
-    k_encoder = Encoder(model, tokenizer, k_preprocessing, k_postprocessing)
-    k_base = KnowledgeBase("DSTC9/data", "knowledge.json")
-
-    k_vectors = torch.cat([k_encoder(val) for val in k_base[:10]])
-
-
-    #dialog_context
-    from transforms import ConcatenateDialogContext, PoolerExtractor
-    from dataset import DSTCDataset
-    d_preprocessing = ConcatenateDialogContext(user_special_token='<U>', agent_special_token='<S>')
-    d_postprocessing = PoolerExtractor()
-    d_encoder = Encoder(model, tokenizer, d_preprocessing, d_postprocessing)
-    d_train_dataset = DSTCDataset('train', 'DSTC9/data/', knowledge_base=k_base, encoder=d_encoder, labels=True)
-
-    d_train_dataset[0]
-
-    #parameters
-    d_train_dataloader = DataLoader(d_train_dataset, batch_size=2)
-
-    from torch.nn.functional import softmax
-    from torch import argmax
-    for batch in d_train_dataloader:
-        res = batch[0] @ k_base.knowledge_vectors.T
-        res = softmax(res, dim=-1).topk(k=5)
-        res = argmax(res, ).flatten()
-        res = [k_base.list_docs[x] for x in res]
-        break
-        # dialog_batch, knowledge_batch = batch
+    if method == 'vectorize_knowledge':
+        vectorized_knowledge.main(args.dataroot, args.device, args.output_path, config)
+    elif method == 'zeroshot':
+        zeroshot.main(args.dataroot, args.dataset, args.device, args.ouput_path, config)
 
