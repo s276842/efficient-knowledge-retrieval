@@ -3,33 +3,7 @@ import os.path
 import random
 from torch.utils.data import Dataset
 # extract information (keys) from a knowledge snippet and concatenate using the separator token
-SPECIAL_TOKENS = {'domain':'<D>', 'name': '<E>', 'question': '<Q>', 'answer': '<A>', 'U': '<U>', 'S': '<S>'}
 
-
-
-class ConcatenateKnowledge:
-    def __init__(self, keys=['domain', 'name', 'question', 'answer'], sep_tokens=SPECIAL_TOKENS):
-        self.keys = keys
-        self.sep_tokens = sep_tokens
-
-        # if both domain and entity_name are required, we need to do an additional check
-        # for those domains that does not have entities, such as train and taxi
-        if 'name' in self.keys:
-            self.check_entity_name = True
-            self.alt_keys = ['domain'] + [key for key in keys if key != 'domain' and key!= 'name']
-        else:
-            self.check_entity_name = False
-
-    def __call__(self, knowledge_snippet):
-
-        # if the current knowledge snippet belongs to a domain without entities
-        if self.check_entity_name and knowledge_snippet['name'] == None:
-            keys = self.alt_keys
-        else:
-            keys = self.keys
-
-        pairs_sep_key = [f'{self.sep_tokens[key]} {knowledge_snippet[key]} ' for key in keys]
-        return ''.join(pairs_sep_key)
 
 
 
@@ -220,65 +194,70 @@ def random_exclusion(start, stop, excluded) -> int:
     return value
 
 class NegativeKnowledgeSampler():
-    def __init__(self, knowledge_base: KnowledgeBase):
+    def __init__(self, knowledge_base: KnowledgeBase, method='domain', filter='random'):
         self.knowledge_base = knowledge_base
-        pass
+        self.filter = filter
+        self.method = self.set_selection_method(method)
 
-    def sample_domain(self, domain):
-        ind_min, ind_max = self.knowledge_base.ranges[domain]
-        l = len(self.knowledge_base)
-        i = random_exclusion(0, l-1, range(ind_min, ind_max+1))
-        print(i)
-        return kb[i]['domain']
+    def set_selection_method(self, method='domain'):
+        self.selection_method = self.__getattribute__('sample_negative_' + method)
 
-import random
-def sample(min, max, exclude_min, exclude_max):
-    remove = exclude_max - exclude_min
-    new_max = max - remove
+    def set_selection_filter(self, filter):
+        self.selection_filter = filter
 
+    def sample_negative_domain(self, domain):
+        domains = list(self.knowledge_base.keys())
+        domains.remove(domain)
+        return random.choice(domains)
+
+    def sample_negative_entity(self, *args):
+        domain, entity_id, doc_id = args
+        # select randomly across all domains
+        if self.selection_filter == 'random':
+            # select random domain and corresponding possible entities
+            _, neg = self.select_negative_domain(*args)
+            neg_domain = neg['domain']
+            entities = list(self.k_base[neg_domain].keys())
+
+        # select entity only among the ones in the same domain
+        elif self.selection_filter == 'in-domain':
+            if entity_id == '*':
+                # return self.select_negative_document(domain, entity_id, doc_id)
+                self.set_selection_filter('random')
+                r = self.select_negative_entity(domain, entity_id, doc_id)
+                self.set_selection_filter('in-domain')
+                return r
+
+            neg_domain = domain
+            entities = list(self.k_base[neg_domain].keys())
+            entities.remove(entity_id)  # remove the same entity
+
+        neg_entity_id = random.choice(entities)
+        neg_entity_name = self.k_base[neg_domain][neg_entity_id]['name']
+        neg_entity_name = neg_entity_name if neg_entity_name is not None else neg_domain
+
+        pos_entity_name = self.k_base[domain][entity_id]['name']
+        pos_entity_name = pos_entity_name if pos_entity_name is not None else domain
+
+        return {'domain': domain, 'entity_id': entity_id, 'name': pos_entity_name}, \
+               {'domain': neg_domain, 'entity_id': neg_entity_id, 'name': neg_entity_name}
+
+
+
+def sample(min, max, exclude_from, exclude_to):
+
+    new_max = max - (exclude_to - exclude_from + 1)
+
+    assert exclude_to >= min and exclude_from <= max
     if min < new_max:
         id = random.randint(min, new_max)
     else:
         return None
 
-    if id < exclude_min:
+    if id < exclude_from:
         return id
     else:
-        return (id - exclude_min) + 1+ exclude_max
-
-
-def test_sampling():
-    for _ in range(100000):
-        m = random.randint(0, 1000)
-        M = random.randint(m, m+999)
-        exclude_min = random.randint(m, M)
-        exclude_max = random.randint(exclude_min, M)
-
-        id = sample(m, M , exclude_min, exclude_max)
-        try:
-            assert id >= m
-        except:
-            print(f"not {id} >= {m}", id, m)
-            raise AssertionError
-
-        try:
-            assert id < exclude_min
-        except:
-            print(f"not {id} < {exclude_min}", id, exclude_min)
-            raise AssertionError
-
-        try:
-            assert id > exclude_max
-        except:
-            print(f"not {id} > {exclude_max}", id, exclude_max)
-            raise AssertionError
-
-
-        try:
-            assert id <= M
-        except:
-            print(f"not {id} <= {M}", id, M)
-            raise AssertionError
+        return id + 1 + (exclude_to - exclude_from)
 
 
 
@@ -381,6 +360,13 @@ if __name__ == '__main__':
     dataset = 'test'
 
     kb = KnowledgeBase(dataroot)
+    import numpy as np
+    sampler = NegativeKnowledgeSampler(kb)
+    i = 0
+    for domain in list(kb.keys()):
+        print('='*20, domain, '='*20)
+
+        print(np.unique([sampler.sample_domain(domain) for _ in range(10000)], return_counts=True))
 
     import random
     for i in range(10):
