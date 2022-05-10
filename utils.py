@@ -1,5 +1,5 @@
 import sys
-
+import pandas as pd
 from dataset import KnowledgeBase
 import itertools
 import json
@@ -46,15 +46,13 @@ class ConcatenateKnowledge:
     def __call__(self, knowledge_snippet):
 
         # if the current knowledge snippet belongs to a domain without entities
-        if self.check_entity_name and knowledge_snippet.get('name') == None:
-            keys = self.alt_keys
-            knowledge_snippet['domain-entity'] = knowledge_snippet['domain']
+        #     keys = self.keys
+        #     if self.replace_domain_name:
+        #         ks['name'] = ks['name'].replace(ks['domain'], '')
+        if isinstance(knowledge_snippet, pd.core.frame.DataFrame):
+            pairs_sep_key = [f'{self.sep_tokens[key]} {knowledge_snippet.get(key).item()} ' if knowledge_snippet.get(key).item() is not None else '' for key in self.keys]
         else:
-            keys = self.keys
-            if self.replace_domain_name:
-                knowledge_snippet['name'] = knowledge_snippet['name'].replace(knowledge_snippet['domain'], '')
-
-        pairs_sep_key = [f'{self.sep_tokens[key]} {knowledge_snippet[key]} ' if knowledge_snippet.get(key) is not None else '' for key in keys]
+            pairs_sep_key = [f'{self.sep_tokens[key]} {knowledge_snippet.get(key)} ' if knowledge_snippet.get(key) is not None else '' for key in self.keys]
         return ''.join(pairs_sep_key).strip()
 
 
@@ -67,13 +65,16 @@ def check_domain(true, pred):
 def check_entity(true, pred):
     return str(true['entity_id']) == str(pred['entity_id']) and check_domain(true, pred)
 
-def check_document(true, pred):
+def check_name(true, pred):
+    return str(true['entity_id']) == str(pred['entity_id']) and check_domain(true, pred)
+
+def check_doc(true, pred):
     return int(true['doc_id']) == int(pred['doc_id']) and check_entity(true, pred)
 
 def check_top_knowledge_snippets(true_label, retrieved_snippets):
     topk = len(retrieved_snippets)
     for i, k in enumerate(retrieved_snippets):
-        if check_document(true_label, k):
+        if check_doc(true_label, k):
             return True, (topk - i) % (topk + 1)
 
     return (False, 0)
@@ -236,4 +237,3 @@ if __name__ == '__main__':
     kb = KnowledgeBase('./DSTC9/data')
 
     x,y = get_document_corpus(kb, k_pre)
-
