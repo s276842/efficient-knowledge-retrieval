@@ -2,6 +2,8 @@ from transformers import AutoModel, AutoTokenizer
 from torch.nn import Module
 import torch
 
+
+
 class CLSExtractor:
     def __call__(self, out):
         return out.last_hidden_state[:, 0]
@@ -12,37 +14,56 @@ class PoolerExtractor:
 
 
 class BaseTransformerEncoder(Module):
-    def __init__(self, model_name_or_path, outputlayer='cls', device='cpu'):
+    def __init__(self, model_name_or_path, output_layer='cls', device='cpu'):
         super(BaseTransformerEncoder, self).__init__()
         self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
         self.model = AutoModel.from_pretrained(model_name_or_path).to(device)
         self.device = device
 
-        if outputlayer == 'cls':
-            self.outputlayer = CLSExtractor()
-        elif outputlayer == 'pooler':
-            self.outputlayer = PoolerExtractor()
+        if output_layer == 'cls':
+            self.output_layer = CLSExtractor()
+        elif output_layer == 'pooler':
+            self.output_layer = PoolerExtractor()
         else:
             raise ValueError
 
-    def forward(self, data):
-        data = self.tokenizer(data, padding=True, truncation=True, return_tensors='pt')
-        data = {key:val.to(self.device) for key, val in data.items()}
-        data = self.model(**data)
-        return self.outputlayer(data)
+    def forward(self, input):
+        input = self.tokenizer(input, padding=True, truncation=True, return_tensors='pt').to(self.device)
+        input = self.model(**input)
+        return self.output_layer(input)
+
+
+
+
+
+
 
 
 class RecurrentTransformerEncoder(BaseTransformerEncoder):
-    def __init__(self, model_name_or_path, outputlayer='cls', device='cpu'):
-        super(RecurrentTransformerEncoder, self).__init__(model_name_or_path, outputlayer, device)
+    def __init__(self, model_name_or_path, output_layer='cls',
+                 device='cpu', recurrent_model = torch.nn.GRU, hidden_size=128,
+                 num_layers=4, dropout=0):
+        super(RecurrentTransformerEncoder, self).__init__(model_name_or_path, output_layer, device)
         # self.recurrent_model =
         # self.first_hidden =
+        input_size = self.model.config.hidden_size
+        self.hidden_size = hidden_size
+        self.RNN = recurrent_model(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, dropout=dropout, bidirectional=False)
 
-    def forward(self, data):
-        data = super().forward(data)
+    def forward(self, input, ):
+        input = super().forward(input)
 
-        return self.outputlayer(data)
 
+
+        def forward(self, input, hidden):
+            embedded = self.embedding(input).view(1, 1, -1)
+            output = embedded
+            output, hidden = self.gru(output, hidden)
+            return output, hidden
+
+
+    def init_hidden(self):
+        return torch.zeros(1, 1, self.hidden_size, device=self.device)
 
 
 class DenseRetriever:
@@ -51,8 +72,8 @@ class DenseRetriever:
         tmp = torch.load(vectorized_knowledge_file)
         self.projections = projections
         self.topk = topk
-        # self.matrices = [tmp[p]['matrices'] for p in self.projections]
-        # self.indices = [tmp[p]['keys'] for p in self.projections]
+        # self.matrices = [experiments[p]['matrices'] for p in self.projections]
+        # self.indices = [experiments[p]['keys'] for p in self.projections]
         self.score_function = score_function
         self.projection_tree = {}
 
@@ -86,7 +107,7 @@ class DenseRetriever:
                 key = p_indices[max_ind]
                 p_matrix, p_indices = self.projection_tree[key]
             else: # final prediction
-                topk_ids = scores.topk(self.topk).indices
+                topk_ids = scores.topk(min(self.topk, len(scores))).indices
                 key = [p_indices[ii.item()] for ii in topk_ids]
 
         return key
@@ -155,14 +176,14 @@ class Euclidean:
     def __call__(self, vector, matrix):
         vector = vector.view(1, -1)
         v_shape = vector.shape
-        m_shape = vector.shape
+        m_shape = matrix.shape
 
         if v_shape[1] == m_shape[1]:
             r = torch.cdist(vector, matrix)
         else:
             r = torch.cdist(vector, matrix.T)
 
-        return r.flatten()
+        return 1/(r.flatten())
 
 
 if __name__ == '__main__':
