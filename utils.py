@@ -92,9 +92,9 @@ def store_results(predictions, output_path):
             for k in label['knowledge']:
                 ks = {'domain' : k['domain']}
 
-                ks['entity_id'] = int(entity_id) if (entity_id := k.get('entity_id')) != None and entity_id != '*' else '*'
-                if (doc_id := k.get('doc_id')) != None:
-                    ks['doc_id'] = int(doc_id)
+                ks['entity_id'] = int(k.get('entity_id')) if k.get('entity_id') != None and k.get('entity_id') != '*' else '*'
+                if k.get('doc_id') != None:
+                    ks['doc_id'] = int(k.get('doc_id'))
 
                 best_ks.append(ks)
 
