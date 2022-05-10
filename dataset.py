@@ -2,131 +2,104 @@ import json
 import os.path
 import random
 from torch.utils.data import Dataset
-# extract information (keys) from a knowledge snippet and concatenate using the separator token
-
-
-
+from typing import Callable
+import pandas as pd
+import numpy as np
+from utils import *
 
 
 class KnowledgeBase:
-    def __init__(self, dataroot: str, knowledge_file: str = 'knowledge.json', preprocessing_fn=None, aggregate_additional_info=False):
+    def __init__(self, dataroot: str, knowledge_file: str = 'knowledge.json'):
 
-        # load knowledge database as dictionary. The DSTC9 track1 / DSTC10 track2 kb is organized in a
-        # hierarchical fashion: domain -> entity -> knowledge snippets
         knowledge_path = os.path.join(dataroot, knowledge_file)
 
         with open(knowledge_path, 'r') as f:
             self.knowledge = json.load(f)
 
-        # iterate through the dictionary indexing in a list the tuple of keys (domain, entity_id, doc_id)
-        self.ids = []
-        self.entity_name_dict = {}
-        self.ranges = {}
-        i = 0
+
+        data = []
         for domain in self.knowledge:
-            ind_start_domain = i
+            sample = {'domain':domain}
             d_dict = self.knowledge[domain]
             for entity_id in d_dict:
-                ind_start_entity = i
                 e_dict = d_dict[entity_id]
-                entity_name = e_dict['name']
-                if entity_name is not None:
-                    self.entity_name_dict[entity_name] = {'domain': domain, 'entity_id':entity_id}
+                sample['entity_id'] = entity_id
+                if e_dict['name'] is None:
+                    e_dict['name'] = domain
+                sample.update({key:val for key, val in e_dict.items() if key != 'docs'})
 
                 for doc_id in e_dict['docs']:
-                    self.ids.append((domain, entity_id, doc_id))
-                    i+= 1
+                    sample['doc_id'] = doc_id
+                    sample['question'] = e_dict['docs'][doc_id]['title']
+                    sample['answer'] = e_dict['docs'][doc_id]['body']
+                    data.append(sample.copy())
 
-                self.ranges[(domain, entity_id)] = (ind_start_entity, i-1)
-
-            self.ranges[domain] = (ind_start_domain, i-1)
-
-
-        self.preprocessing_fn = preprocessing_fn
-        self.aggregate_additional_info = aggregate_additional_info
-
-    def get_label(self, index: int):
-        if isinstance(index, int):
-            domain, entity_id, doc_id = self.ids[index]
-            return {'domain': domain, 'entity_id': entity_id, 'doc_id': doc_id}
-
-
-    def keys(self):
-        return self.knowledge.keys()
-
+        self.knowledge = pd.DataFrame(data)
+        self.domains = self.knowledge.domain.unique().tolist()
+        self.entities = {domain: df.name.unique().tolist() for domain, df in self.knowledge.groupby('domain')}
 
     def __getitem__(self, item):
-        if isinstance(item, slice):
-            return [self[ii] for ii in range(*item.indices(len(self)))]
-        elif isinstance(item, list):
-            return [self[ii] for ii in item]
-        elif isinstance(item, int):
-            id = self.ids[item]
-            return self[id]
+        if isinstance(item, str):
+            return self.knowledge[self.knowledge.domain == item]
+
         elif isinstance(item, tuple):
-            domain, entity_id, doc_id = item
-            if not isinstance(entity_id, str):
-                entity_id = str(entity_id)
-            if not isinstance(doc_id, str):
-                doc_id = str(doc_id)
+            mask = (self.knowledge.domain == item[0]).values
+            for val, field in zip(item[1:], [self.knowledge.entity_id, self.knowledge.doc_id]):
+                mask &= (field == val).values
 
-            e_dict = self.knowledge[domain][entity_id]
-            question, answer = e_dict['docs'][doc_id].values()
-            knowledge_snippet = {'domain': domain, 'entity_id': entity_id, 'doc_id': doc_id,
-                 'question': question, 'answer': answer}
+            return self.knowledge[mask]
 
-
-            # todo check if additional info (city) can be useful for classification of the entities
-            if self.aggregate_additional_info:
-                s = list()
-                for key in e_dict:
-                    if key != 'docs':
-                        s += ([val.strip().lower() for val in e_dict[key].split()])
-                knowledge_snippet['name'] = ' '.join(set(s))
-
-            else:
-                for key in e_dict:
-                    if key != 'docs':
-                        knowledge_snippet[key] = e_dict[key]
-
-        elif isinstance(item, str):
-            return self.knowledge[item]
+        elif isinstance(item, int):
+            return self.knowledge.iloc[item]
         else:
             raise IndexError
 
-        if self.preprocessing_fn is not None:
-            knowledge_snippet = self.preprocessing_fn(knowledge_snippet)
-
-        return knowledge_snippet
-
-    def __len__(self):
-        return len(self.ids)
-
-    def __iter__(self):
-        for id in self.ids:
-            yield self[id]
 
 
+def sample_kb_triplets(knowledge_base, anchor='domain', pos=['question', 'answer'], neg=['question', 'answer'], n_samples=1000, n_negatives=1):
+    # preparing corpus, pos and neg
+    n_samples_per_domain = n_samples//len(knowledge_base.domains)
+    samples = []
+
+    anchor_preprocessing = ConcatenateKnowledge(keys=anchor if isinstance(anchor, list) else [anchor])
+    pos_preprocessing = ConcatenateKnowledge(keys=pos if isinstance(pos, list) else [pos])
+    neg_preprocessing = ConcatenateKnowledge(keys=neg if isinstance(neg, list) else [neg])
+
+    dfs = {domain:df for domain, df in knowledge_base.knowledge.groupby('domain')}
+
+    for domain in knowledge_base.domains:
+        anchor_choices = np.unique([anchor_preprocessing(row) for ind, row in dfs[domain].iterrows()]).tolist()
+        pos_choices = np.unique([pos_preprocessing(row) for ind, row in dfs[domain].iterrows()]).tolist()
+        # pos_choices = np.unique([' '.join(sample) if isinstance(sample, np.ndarray) else sample for sample in dfs[domain][pos_field].values]).tolist()
+        neg_choices = np.unique(
+            [neg_preprocessing(row) for d in knowledge_base.domains for ind, row in dfs[d].iterrows() if d != domain]).tolist()
+
+        n_negatives = min(n_negatives, len(neg_choices))
+
+        for _ in range(n_samples_per_domain):
+
+            samples.append(
+                {
+                    'anchor': random.choice(anchor_choices),
+                    'pos': random.choice(pos_choices),
+                    'neg': np.random.choice(neg_choices, n_negatives, replace=False).tolist()
+                }
+            )
+
+    return samples
 
 
-
-
-
-class DialogContext:
-
-    def __init__(self,
-                 dataroot: str,
-                 dataset: str,
-                 log_file: str = 'logs.json',
-                 label_file: str = 'labels.json',
-                 selection_turns_only=False,
-                 preprocessing_fn=None):
+class DialogsDataset(Dataset):
+    def __init__(self, dataroot: str, dataset: str, log_file: str = 'logs.json', label_file: str = 'labels.json',
+                 selection_turns_only=False, preprocessing_fn=None):
+        super(DialogsDataset, self).__init__()
 
         logs_path = os.path.join(dataroot, dataset, log_file)
         with open(logs_path, 'r') as f:
             self.dialogs = json.load(f)
 
         self.labels = None
+        self.selection_turns_only = selection_turns_only
         labels_path = os.path.join(dataroot, dataset, label_file)
         if os.path.exists(labels_path):
             with open(labels_path, 'r') as f:
@@ -155,12 +128,11 @@ class DialogContext:
 
         return selection_dialogs, selection_labels
 
-
     def __len__(self):
         return len(self.labels)
 
     def __getitem__(self, item):
-        if isinstance(item, int):
+        if isinstance(item, int) or isinstance(item, np.int32):
             data = self.dialogs[item]
             label = None
             if self.labels is not None:
@@ -183,231 +155,57 @@ class DialogContext:
 
 
 
-def random_exclusion(start, stop, excluded) -> int:
-    """Function for getting a random number with some numbers excluded"""
-    excluded = set(excluded)
-    value = random.randint(start, stop - len(excluded)) # Or you could use randrange
-    for exclusion in tuple(excluded):
-        if value < exclusion:
-            break
-        value += 1
-    return value
+def sample_dialog_triplets(dialogs: DialogsDataset, knowledge_base: KnowledgeBase,
+                           knowledge_preprocessing=None, n_samples=1000, n_negatives=1):
+    # preparing corpus, pos and neg
+    assert dialogs.selection_turns_only is True
 
-class NegativeKnowledgeSampler():
-    def __init__(self, knowledge_base: KnowledgeBase, method='domain', filter='random'):
-        self.knowledge_base = knowledge_base
-        self.filter = filter
-        self.method = self.set_selection_method(method)
+    n_samples_per_domain = n_samples//len(knowledge_base.domains)
+    samples = []
+    dfs = {domain: df for domain, df in knowledge_base.knowledge.groupby('domain')}
+    if knowledge_preprocessing is None:
+        knowledge_preprocessing = ConcatenateKnowledge()
+    for domain in knowledge_base.domains:
 
-    def set_selection_method(self, method='domain'):
-        self.selection_method = self.__getattribute__('sample_negative_' + method)
+        mask_domain = [i for i, label in enumerate(dialogs.labels) if label['domain'] == domain]
 
-    def set_selection_filter(self, filter):
-        self.selection_filter = filter
+        # implement random in-domain in-entity
+        neg_domains = list(knowledge_base.domains)
+        neg_domains.remove(domain)
+        neg_choices = np.unique(
+            [knowledge_preprocessing(row) for d in neg_domains for ind, row in dfs[d].iterrows()]).tolist()
 
-    def sample_negative_domain(self, domain):
-        domains = list(self.knowledge_base.keys())
-        domains.remove(domain)
-        return random.choice(domains)
+        n_negatives = min(n_negatives, len(neg_choices))
 
-    def sample_negative_entity(self, *args):
-        domain, entity_id, doc_id = args
-        # select randomly across all domains
-        if self.selection_filter == 'random':
-            # select random domain and corresponding possible entities
-            _, neg = self.select_negative_domain(*args)
-            neg_domain = neg['domain']
-            entities = list(self.k_base[neg_domain].keys())
+        for _ in range(n_samples_per_domain):
+            dialog, label = dialogs[np.random.choice(mask_domain)]
+            true_domain = label['domain']
+            entity_id = str(label['entity_id'])
+            doc_id = str(label['doc_id'])
+            pos = knowledge_preprocessing(knowledge_base[true_domain, entity_id, doc_id])
+            neg = np.random.choice(neg_choices, n_negatives, replace=False).tolist()
 
-        # select entity only among the ones in the same domain
-        elif self.selection_filter == 'in-domain':
-            if entity_id == '*':
-                # return self.select_negative_document(domain, entity_id, doc_id)
-                self.set_selection_filter('random')
-                r = self.select_negative_entity(domain, entity_id, doc_id)
-                self.set_selection_filter('in-domain')
-                return r
+            samples.append(
+                {
+                    'anchor': dialog,
+                    'pos': pos,
+                    'neg': neg
+                }
+            )
 
-            neg_domain = domain
-            entities = list(self.k_base[neg_domain].keys())
-            entities.remove(entity_id)  # remove the same entity
-
-        neg_entity_id = random.choice(entities)
-        neg_entity_name = self.k_base[neg_domain][neg_entity_id]['name']
-        neg_entity_name = neg_entity_name if neg_entity_name is not None else neg_domain
-
-        pos_entity_name = self.k_base[domain][entity_id]['name']
-        pos_entity_name = pos_entity_name if pos_entity_name is not None else domain
-
-        return {'domain': domain, 'entity_id': entity_id, 'name': pos_entity_name}, \
-               {'domain': neg_domain, 'entity_id': neg_entity_id, 'name': neg_entity_name}
-
-
-
-def sample(min, max, exclude_from, exclude_to):
-
-    new_max = max - (exclude_to - exclude_from + 1)
-
-    assert exclude_to >= min and exclude_from <= max
-    if min < new_max:
-        id = random.randint(min, new_max)
-    else:
-        return None
-
-    if id < exclude_from:
-        return id
-    else:
-        return id + 1 + (exclude_to - exclude_from)
-
-
-
-class TripletSelectionDataset(Dataset):
-
-    def __init__(self, dialog_context_dataset: DialogContext, knowledge_base: KnowledgeBase):
-        self.data = dialog_context_dataset
-        self.k_base = knowledge_base
-        self.selection_method = self.select_negative_domain
-        self.selection_filter = 'random'
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, item):
-        if isinstance(item, int):
-            anchor, label = self.data[item]
-            pos, neg = self.selection_method(**label)
-            return {'anchor': anchor, 'pos': pos, 'neg': neg}
-        elif isinstance(item, slice):
-            return [self[ii] for ii in range(*item.indices(len(self)))]
-        elif isinstance(item, list):
-            return [self[ii] for ii in item]
-        else:
-            raise IndexError
-
-    def set_selection_method(self, method='domain'):
-        self.selection_method = self.__getattribute__('select_negative_' + method)
-
-    def set_selection_filter(self, filter='random'):
-        self.selection_filter = filter
-
-    def select_negative_domain(self, domain, entity_id, doc_id):
-        domains = list(self.k_base.knowledge.keys())
-        domains.remove(domain)
-        return {'domain': domain}, {'domain': random.choice(domains)}
-
-
-    def select_negative_entity(self, domain, entity_id, doc_id):
-        # select randomly across all domains
-        if self.selection_filter == 'random':
-            # select random domain and corresponding possible entities
-            _, neg = self.select_negative_domain(domain, entity_id, doc_id)
-            neg_domain = neg['domain']
-            entities = list(self.k_base[neg_domain].keys())
-
-        # select entity only among the ones in the same domain
-        elif self.selection_filter == 'in-domain':
-            if entity_id == '*':
-                # return self.select_negative_document(domain, entity_id, doc_id)
-                self.set_selection_filter('random')
-                r = self.select_negative_entity(domain, entity_id, doc_id)
-                self.set_selection_filter('in-domain')
-                return r
-
-            neg_domain = domain
-            entities = list(self.k_base[neg_domain].keys())
-            entities.remove(entity_id)  # remove the same entity
-
-        neg_entity_id = random.choice(entities)
-        neg_entity_name = self.k_base[neg_domain][neg_entity_id]['name']
-        neg_entity_name = neg_entity_name if neg_entity_name is not None else neg_domain
-
-        pos_entity_name = self.k_base[domain][entity_id]['name']
-        pos_entity_name = pos_entity_name if pos_entity_name is not None else domain
-
-        return {'domain': domain, 'entity_id': entity_id, 'name': pos_entity_name}, \
-               {'domain': neg_domain, 'entity_id': neg_entity_id, 'name': neg_entity_name}
-
-    def select_negative_document(self, domain, entity_id, doc_id):
-
-        if self.selection_filter == 'random':
-            pos, neg = self.select_negative_entity(domain, entity_id, doc_id)
-            neg_domain = neg['domain']
-            neg_entity_id = neg['entity_id']
-            docs = list(self.k_base[neg_domain][neg_entity_id]['docs'].keys())
-        elif self.selection_filter == 'in-domain' and entity_id != '*':
-            neg_domain = domain
-            entities = list(self.k_base[domain].keys())
-            entities.remove(entity_id)
-            neg_entity_id = random.choice(entities)
-            docs = list(self.k_base[neg_domain][neg_entity_id]['docs'].keys())
-        else:
-            neg_domain = domain
-            neg_entity_id = entity_id
-            docs = list(self.k_base[neg_domain][neg_entity_id]['docs'].keys())
-            docs.remove(doc_id)
-
-        neg_doc_id = random.choice(docs)
-
-        return self.k_base[(domain, entity_id, doc_id)], self.k_base[(neg_domain, neg_entity_id, neg_doc_id)]
-
-
-
-
-
+    return samples
 
 if __name__ == '__main__':
-    dataroot = './DSTC9/data/'
-    dataset = 'test'
+    kb = KnowledgeBase('./DSTC9/data')
+    from utils import *
+    d_data = DialogsDataset('./DSTC9/data', 'train', selection_turns_only=True, preprocessing_fn=ConcatenateDialogContext())
 
-    kb = KnowledgeBase(dataroot)
-    import numpy as np
-    sampler = NegativeKnowledgeSampler(kb)
-    i = 0
-    for domain in list(kb.keys()):
-        print('='*20, domain, '='*20)
+    x = sample_dialog_triplets(d_data, kb)
 
-        print(np.unique([sampler.sample_domain(domain) for _ in range(10000)], return_counts=True))
+    from utils import print_triplet
 
-    import random
-    for i in range(10):
-        print(kb[random.randint(0, len(kb))])
-
-    # from transforms import ConcatenateDialogContext
-    #
-    # dc = DialogContext(dataroot, dataset, selection_turns_only=True, preprocessing_fn=None)
-    #
-    # train_dataset = TripletSelectionDataset(dc, kb)
-    # import numpy as np
-    #
-    # d_pre = ConcatenateDialogContext(limit=1)
-    # for method in ['domain', 'entity', 'document']:
-    #     if method == 'domain':
-    #         filters = ['']
-    #         k_pre = ConcatenateKnowledge('</s>', keys=['domain'])
-    #     elif method == 'entity':
-    #         filters = ['random', 'in-domain']
-    #         k_pre = ConcatenateKnowledge('</s>', keys=['domain', 'name'])
-    #     else:
-    #         filters = ['random', 'in-domain', 'in-entity']
-    #         k_pre = ConcatenateKnowledge('</s>', keys=['domain', 'name', 'question', 'answer'])
-    #
-    #     for filter in filters:
-    #         train_dataset.set_selection_method(method)
-    #         train_dataset.set_selection_filter(filter)
-    #         print(f'========= {method}-{filter} ==========')
-    #         for i in range(10):
-    #             anchor, pos, neg = train_dataset[np.random.randint(len(train_dataset))].values()
-    #
-    #             print(f"Anchor : {d_pre(anchor)}")
-    #             print(f"pos : {k_pre(pos)}")
-    #             print(f"neg : {k_pre(neg)}")
-    #             print()
-    #
-    # # import json
-    # # x = json.load(open('./out.tmp.json'))
-    # r = []
-    # for label in x:
-    #     if label['target'] == False:
-    #         r.append(label)
-    #     else:
-    #         label['knowledge'] = [{'domain':x['domain'}
+    for triplet in x[:10]:
+        anchor = triplet['anchor']
+        pos = triplet['pos']
+        neg = triplet['neg'][0]
+        print_triplet(anchor, pos, neg)
