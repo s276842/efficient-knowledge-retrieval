@@ -178,7 +178,7 @@ def sample_dialog_triplets(dialogs: DialogsDataset, knowledge_base: KnowledgeBas
         n_negatives = min(n_negatives, len(neg_choices))
 
         for _ in range(n_samples_per_domain):
-            dialog, label = dialogs[np.random.choice(mask_domain)]
+            dialog, label = dialogs[random.choice(mask_domain)]
             true_domain = label['domain']
             entity_id = str(label['entity_id'])
             doc_id = str(label['doc_id'])
