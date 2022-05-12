@@ -56,7 +56,8 @@ class KnowledgeBase:
 
 
 
-def sample_kb_triplets(knowledge_base, anchor='domain', pos=['question', 'answer'], neg=['question', 'answer'], n_samples=1000, n_negatives=1):
+def sample_kb_triplets(knowledge_base, anchor='domain', pos=['question', 'answer'],
+                       neg=['question', 'answer'], n_samples=1000, n_negatives=1, domains=None):
     # preparing corpus, pos and neg
     n_samples_per_domain = n_samples//len(knowledge_base.domains)
     samples = []
@@ -67,7 +68,10 @@ def sample_kb_triplets(knowledge_base, anchor='domain', pos=['question', 'answer
 
     dfs = {domain:df for domain, df in knowledge_base.knowledge.groupby('domain')}
 
-    for domain in knowledge_base.domains:
+    if domains is None:
+        domains = knowledge_base.domains
+
+    for domain in domains:
         anchor_choices = np.unique([anchor_preprocessing(row) for ind, row in dfs[domain].iterrows()]).tolist()
         pos_choices = np.unique([pos_preprocessing(row) for ind, row in dfs[domain].iterrows()]).tolist()
         # pos_choices = np.unique([' '.join(sample) if isinstance(sample, np.ndarray) else sample for sample in dfs[domain][pos_field].values]).tolist()
@@ -156,7 +160,7 @@ class DialogsDataset(Dataset):
 
 
 def sample_dialog_triplets(dialogs: DialogsDataset, knowledge_base: KnowledgeBase,
-                           knowledge_preprocessing=None, n_samples=1000, n_negatives=1):
+                           knowledge_preprocessing=None, n_samples=1000, n_negatives=1, method='random'):
     # preparing corpus, pos and neg
     assert dialogs.selection_turns_only is True
 
@@ -165,17 +169,13 @@ def sample_dialog_triplets(dialogs: DialogsDataset, knowledge_base: KnowledgeBas
     dfs = {domain: df for domain, df in knowledge_base.knowledge.groupby('domain')}
     if knowledge_preprocessing is None:
         knowledge_preprocessing = ConcatenateKnowledge()
+
+
     for domain in knowledge_base.domains:
 
         mask_domain = [i for i, label in enumerate(dialogs.labels) if label['domain'] == domain]
 
-        # implement random in-domain in-entity
-        neg_domains = list(knowledge_base.domains)
-        neg_domains.remove(domain)
-        neg_choices = np.unique(
-            [knowledge_preprocessing(row) for d in neg_domains for ind, row in dfs[d].iterrows()]).tolist()
 
-        n_negatives = min(n_negatives, len(neg_choices))
 
         for _ in range(n_samples_per_domain):
             dialog, label = dialogs[random.choice(mask_domain)]
@@ -183,6 +183,22 @@ def sample_dialog_triplets(dialogs: DialogsDataset, knowledge_base: KnowledgeBas
             entity_id = str(label['entity_id'])
             doc_id = str(label['doc_id'])
             pos = knowledge_preprocessing(knowledge_base[true_domain, entity_id, doc_id])
+
+            if method == 'random':
+                # implement random in-domain in-entity
+                neg_domains = list(knowledge_base.domains)
+                neg_domains.remove(domain)
+                neg_choices = np.unique(
+                    [knowledge_preprocessing(row) for d in neg_domains for ind, row in dfs[d].iterrows()]).tolist()
+
+            elif method == 'in-domain':
+                neg_choices = np.unique([knowledge_preprocessing(row) for ind, row in dfs[true_domain].iterrows()]).tolist()
+
+            else:
+                neg_choices = np.unique([knowledge_preprocessing(row) for ind, row in dfs[true_domain][dfs[true_domain].entity_id == entity_id].iterrows()]).tolist()
+
+
+            n_negatives = min(n_negatives, len(neg_choices))
             neg = np.random.choice(neg_choices, n_negatives, replace=False).tolist()
 
             samples.append(
@@ -194,3 +210,18 @@ def sample_dialog_triplets(dialogs: DialogsDataset, knowledge_base: KnowledgeBas
             )
 
     return samples
+
+if __name__ == '__main__':
+    kb = KnowledgeBase('./DSTC9/data')
+    from utils import *
+    d_data = DialogsDataset('./DSTC9/data', 'train', selection_turns_only=True, preprocessing_fn=ConcatenateDialogContext())
+
+    x = sample_dialog_triplets(d_data, kb)
+
+    from utils import print_triplet
+
+    for triplet in x[:10]:
+        anchor = triplet['anchor']
+        pos = triplet['pos']
+        neg = triplet['neg'][0]
+        print_triplet(anchor, pos, neg)
