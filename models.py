@@ -18,7 +18,7 @@ class SentenceEncoder(nn.Module):
         self.hidden_size = self.model.config.hidden_size
         self.device = device
 
-    def forward(self, input):
+    def forward(self, input, **kwargs):
         encoded_input = self.tokenizer(input, padding=True, truncation=True, return_tensors='pt')
         encoded_input = {key:val.to(self.device) for key, val in encoded_input.items()}
         model_output = self.model(**encoded_input)
@@ -69,6 +69,50 @@ class HeadedEncoder(nn.Module):
         return input_encoding
 
 
+from torch import Tensor, sum, exp, mm, bmm, nn
+
+class NContrastiveLoss(nn.Module):
+    '''
+    Compute generalised Contrastive Loss, where there is 1 positive and N negative labels
+    for each instance. The embedding of the instance gets pulled close to the positive
+    label embedding while being pushed away from each of the N negative labels embeddings.
+    https://papers.nips.cc/paper/2016/hash/6b180037abbebea991d8b1232f8a8ca9-Abstract.html
+    '''
+    def __init__(self) -> None:
+        super(NContrastiveLoss, self).__init__()
+
+    def forward(self, anchor: Tensor, positive: Tensor, negatives: Tensor) -> torch.float:
+        '''
+        Pulls anchor and positive closer together and pushes anchor and negatives further
+        apart.
+        For each example in the batch, there is 1 anchor, 1 positive and N negatives.
+        The loss formulated here optimizes the dot product.
+
+        Parameters
+        ----------
+        anchor: 2D tensor
+                batch of anchors embeddings
+        positive: 2D tensor
+                  batch of positive embedding
+        negatives : 3D tensor
+                    batch of N-negatives embeddings per
+
+        Returns
+        -------
+        Float tensor
+            Sum of N-contrastive-loss for each element of the batch.
+        '''
+        # Make anchor and positive tensors 3D, by expanding empty dimension 1.
+        batch_size = len(anchor)
+        anchor = anchor.unsqueeze(1)
+        positive = positive.unsqueeze(1)
+        # Compute loss.
+        A = exp(bmm(anchor, positive.transpose(2, 1))).view(batch_size)
+        B = sum(exp(bmm(anchor, negatives.transpose(2, 1)).squeeze(1)), dim=-1)
+        return -sum(torch.log(A / (A + B)), dim=-1) / batch_size
+
+    def _get_name(self):
+        return 'NContrastiveLoss'
 
 
 
