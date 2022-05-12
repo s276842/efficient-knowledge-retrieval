@@ -1,6 +1,5 @@
 import sys
 import pandas as pd
-from dataset import KnowledgeBase
 import itertools
 import json
 import os
@@ -92,9 +91,9 @@ def store_results(predictions, output_path):
             for k in label['knowledge']:
                 ks = {'domain' : k['domain']}
 
-                ks['entity_id'] = int(k.get('entity_id')) if k.get('entity_id') != None and k.get('entity_id') != '*' else '*'
-                if k.get('doc_id') != None:
-                    ks['doc_id'] = int(k.get('doc_id'))
+                ks['entity_id'] = int(entity_id) if (entity_id := k.get('entity_id')) != None and entity_id != '*' else '*'
+                if (doc_id := k.get('doc_id')) != None:
+                    ks['doc_id'] = int(doc_id)
 
                 best_ks.append(ks)
 
@@ -123,19 +122,19 @@ def score_results(dataroot, dataset, out_file, score_file):
 # ====================================================================
 
 
-def get_domain_corpus(knowledge_base: KnowledgeBase, knowledge_preprocessing):
+def get_domain_corpus(knowledge_base, knowledge_preprocessing):
     corpus_ids = [{'domain':domain} for domain in knowledge_base.keys()]
     corpus = [knowledge_preprocessing(ks) for ks in corpus_ids]
 
     return corpus, corpus_ids
 
-def get_hierarchical_domain_corpus(knowledge_base: KnowledgeBase):
+def get_hierarchical_domain_corpus(knowledge_base):
     corpus_ids = {'': [{'domain':domain} for domain in knowledge_base.keys()]}
     corpus = corpus_ids
 
     return corpus, corpus_ids
 
-def get_hierarchical_entity_corpus(knowledge_base: KnowledgeBase):
+def get_hierarchical_entity_corpus(knowledge_base):
     corpus = {}
     corpus_ids = {}
     for domain in knowledge_base.keys():
@@ -149,7 +148,7 @@ def get_hierarchical_entity_corpus(knowledge_base: KnowledgeBase):
     return corpus, corpus_ids
 
 
-def get_entity_corpus(knowledge_base: KnowledgeBase, knowledge_preprocessing):
+def get_entity_corpus(knowledge_base, knowledge_preprocessing):
     corpus_ids = []
     for domain in knowledge_base.keys():
         domain_dict = knowledge_base[domain]
@@ -165,7 +164,7 @@ def get_entity_corpus(knowledge_base: KnowledgeBase, knowledge_preprocessing):
     return corpus, corpus_ids
 
 
-def get_hierarchical_document_corpus(knowledge_base: KnowledgeBase):
+def get_hierarchical_document_corpus(knowledge_base):
     corpus = {}
     corpus_ids = {}
     for domain in knowledge_base.keys():
@@ -232,8 +231,3 @@ def print_triplet(anchor, pos, neg):
     print(f'{"neg":<7}:', neg[:100]+ ('...' if len(neg)>=100 else ''))
     print()
 
-if __name__ == '__main__':
-    k_pre = ConcatenateKnowledge()
-    kb = KnowledgeBase('./DSTC9/data')
-
-    x,y = get_document_corpus(kb, k_pre)
