@@ -1,5 +1,6 @@
 import sys
 import pandas as pd
+from dataset import KnowledgeBase
 import itertools
 import json
 import os
@@ -91,9 +92,9 @@ def store_results(predictions, output_path):
             for k in label['knowledge']:
                 ks = {'domain' : k['domain']}
 
-                ks['entity_id'] = int(entity_id) if (entity_id := k.get('entity_id')) != None and entity_id != '*' else '*'
-                if (doc_id := k.get('doc_id')) != None:
-                    ks['doc_id'] = int(doc_id)
+                ks['entity_id'] = int(k.get('entity_id')) if k.get('entity_id') != None and k.get('entity_id') != '*' else '*'
+                if k.get('doc_id') != None:
+                    ks['doc_id'] = int(k.get('doc_id'))
 
                 best_ks.append(ks)
 
@@ -232,94 +233,3 @@ def print_triplet(anchor, pos, neg):
     print()
 
 
-
-# def validate(method, model, similarity_fn, dataroot, dataset, dialog_context_dataset, knowledge_base, corpus_embeddings,
-#              corpus_ids, topk, device,
-#              vectorized_knowledge_file=None, concatenation='domain-name-question-answer', use_special_tokens=False,
-#              log_negatives=False, fp_log_negatives=None, experiment_name=None, experiment_out_path='.'):
-#     check_snippet = getattr(, f'check_{method}')
-#
-#     if vectorized_knowledge_file is None:
-#         get_corpus = getattr(utils, f'get_{method}_corpus')
-#         concatenation = concatenation.split('-')
-#
-#         # todo add normal tokens as separator
-#         knowledge_preprocessing = ConcatenateKnowledge(keys=concatenation,
-#                                                        sep_tokens=SPECIAL_TOKENS if use_special_tokens else NO_SPECIAL_TOKENS)
-#         corpus, corpus_ids = get_corpus(knowledge_base, knowledge_preprocessing)
-#         corpus_embeddings = model.encode(corpus[:10], convert_to_tensor=True, device=device)
-#
-#     else:
-#         # corpus embeddings = load file
-#         pass
-#
-#     # predictions
-#     n_iter = 0
-#     n_correct = 0
-#     print_every = 100
-#     predictions = []
-#     selection_times = []
-#
-#     with torch.no_grad():
-#         for query, label in (pbar := tqdm(dialog_context_dataset)):
-#             if label['target'] == False:
-#                 predictions.append(label)
-#             else:
-#                 n_iter += 1
-#                 true_snippet = label['knowledge'][0]
-#                 selection_start_time = time.time()
-#                 query_embeddings = model.encode(query, convert_to_tensor=True, device=device)
-#                 sim_score = similarity_fn(query_embeddings, corpus_embeddings)[0]
-#
-#                 top_snippet_scores, top_snippet_indices = torch.topk(sim_score, k=topk)
-#                 top_snippets = [corpus_ids[idx.item()] for idx in top_snippet_indices]
-#                 selection_end_time = time.time()
-#
-#                 selection_times.append(selection_end_time - selection_start_time)
-#
-#                 is_correct = check_snippet(true_snippet, top_snippets[0])
-#
-#                 if is_correct:
-#                     n_correct += 1
-#                 else:
-#                     if log_negatives:
-#                         print_example(method, query,
-#                                       candidates=top_snippets,
-#                                       scores=top_snippet_scores,
-#                                       knowledge_base=knowledge_base,
-#                                       label=true_snippet,
-#                                       fp=fp_log_negatives,
-#                                       knowledge_preprocessing=knowledge_preprocessing)
-#
-#                 # print(f'\t [{n_correct}/{n_iter}] top-1 {method} acc. {n_correct/n_iter:.4f}', end='', file=sys.stderr)
-#                 pbar.set_description(f'[{n_correct}/{n_iter}] top-1 {method} acc. {n_correct / n_iter:.4f}')
-#                 # if verbose and n_iter % print_every == (print_every - 1):
-#                 #     print_example(f'Top {topk} relevant knowledge snippets: ', query, top_results[0], top_snippets)
-#
-#                 label['knowledge'] = top_snippets
-#                 predictions.append(label)
-#
-#     mean_sel_time = np.mean(selection_times)
-#     std_sel_time = np.std(selection_times)
-#
-#     res_filename = os.path.join(experiment_out_path, experiment_name + '.res.json')
-#     store_results(predictions, res_filename)
-#
-#     if method == 'document':
-#         score_filename = os.path.join(experiment_out_path, experiment_name + '.scores.json')
-#         scores = score_results(dataroot, dataset, res_filename, score_filename)
-#         r1 = scores['r@1']
-#         r5 = scores['r@5']
-#         mrr = scores['mrr']
-#
-#         print(f'\nSelection scores: r@1={r1:.3f} r@5={r5:.3f} mrr={mrr:.3f}')
-#
-#         with open(os.path.join(experiment_out_path, 'results.csv'), 'a') as f:
-#             f.write(','.join([experiment_name, str(r1), str(r5), str(mrr), str(mean_sel_time), str(std_sel_time)]))
-#             f.write('\n')
-#     else:
-#         with open(os.path.join(experiment_out_path, 'results.csv'), 'a') as f:
-#             f.write(','.join([experiment_name, n_correct / n_iter, str(std_sel_time)]))
-#             f.write('\n')
-#
-#     return
