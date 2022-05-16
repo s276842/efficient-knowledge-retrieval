@@ -1,6 +1,5 @@
 import sys
 import pandas as pd
-from dataset import KnowledgeBase
 import itertools
 import json
 import os
@@ -56,6 +55,13 @@ class ConcatenateKnowledge:
         return ''.join(pairs_sep_key).strip()
 
 
+def dialog_to_turns(dialog):
+    turns = [{'U':dialog[0]['text']}]
+
+    for system_turn, user_turn in zip(dialog[1::2], dialog[2::2]):
+        turns += [{'S':system_turn['text'], 'U':user_turn['text']}]
+
+    return turns
 # ==============================================================
 
 

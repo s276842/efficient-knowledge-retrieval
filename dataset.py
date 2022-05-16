@@ -6,7 +6,7 @@ from typing import Callable
 import pandas as pd
 import numpy as np
 from utils import *
-
+from tqdm import tqdm
 
 class KnowledgeBase:
     def __init__(self, dataroot: str, knowledge_file: str = 'knowledge.json'):
@@ -49,22 +49,20 @@ class KnowledgeBase:
 
             return self.knowledge[mask]
 
-        elif isinstance(item, int):
-            return self.knowledge.iloc[item]
         else:
-            raise IndexError
+            return self.knowledge.iloc[item]
 
 
 
-def sample_kb_triplets(knowledge_base, anchor='domain', pos=['question', 'answer'],
-                       neg=['question', 'answer'], n_samples=1000, n_negatives=1, domains=None):
-    # preparing corpus, pos and neg
+def sample_kb_triplets(knowledge_base, anchor_fields='domain', pos_fields=['question', 'answer'],
+                       neg_fields=['question', 'answer'], n_samples=1000, n_negatives=1, domains=None):
+    # preparing corpus, pos_fields and neg_fields
     n_samples_per_domain = n_samples//len(knowledge_base.domains)
     samples = []
 
-    anchor_preprocessing = ConcatenateKnowledge(keys=anchor if isinstance(anchor, list) else [anchor])
-    pos_preprocessing = ConcatenateKnowledge(keys=pos if isinstance(pos, list) else [pos])
-    neg_preprocessing = ConcatenateKnowledge(keys=neg if isinstance(neg, list) else [neg])
+    anchor_preprocessing = ConcatenateKnowledge(keys=anchor_fields if isinstance(anchor_fields, list) else [anchor_fields])
+    pos_preprocessing = ConcatenateKnowledge(keys=pos_fields if isinstance(pos_fields, list) else [pos_fields])
+    neg_preprocessing = ConcatenateKnowledge(keys=neg_fields if isinstance(neg_fields, list) else [neg_fields])
 
     dfs = {domain:df for domain, df in knowledge_base.knowledge.groupby('domain')}
 
@@ -82,13 +80,7 @@ def sample_kb_triplets(knowledge_base, anchor='domain', pos=['question', 'answer
 
         for _ in range(n_samples_per_domain):
 
-            samples.append(
-                {
-                    'anchor': random.choice(anchor_choices),
-                    'pos': random.choice(pos_choices),
-                    'neg': np.random.choice(neg_choices, n_negatives, replace=False).tolist()
-                }
-            )
+            samples.append((random.choice(anchor_choices),random.choice(pos_choices), np.random.choice(neg_choices, replace=False)))
 
     return samples
 
@@ -143,7 +135,7 @@ class DialogsDataset(Dataset):
                 label = self.labels[item]
         elif isinstance(item, slice):
             return [self[ii] for ii in range(*item.indices(len(self)))]
-        elif isinstance(item, list):
+        elif isinstance(item, list) or isinstance(item, np.ndarray):
             return [self[ii] for ii in item]
         else:
             raise IndexError
@@ -160,68 +152,71 @@ class DialogsDataset(Dataset):
 
 
 def sample_dialog_triplets(dialogs: DialogsDataset, knowledge_base: KnowledgeBase,
-                           knowledge_preprocessing=None, n_samples=1000, n_negatives=1, method='random'):
+                           fields=['domain', 'name', 'question', 'answer'], n_samples=1000, n_negatives=1, method='random'):
     # preparing corpus, pos and neg
     assert dialogs.selection_turns_only is True
 
+    #todo correct n_samples as the min between n_samples and the len of the possible samples
     n_samples_per_domain = n_samples//len(knowledge_base.domains)
-    samples = []
-    dfs = {domain: df for domain, df in knowledge_base.knowledge.groupby('domain')}
-    if knowledge_preprocessing is None:
-        knowledge_preprocessing = ConcatenateKnowledge()
+    knowledge_preprocessing = ConcatenateKnowledge(keys=fields)
 
-
-    for domain in knowledge_base.domains:
-
+    triplets = []
+    for domain in tqdm(knowledge_base.domains):
         mask_domain = [i for i, label in enumerate(dialogs.labels) if label['domain'] == domain]
+        dialog_samples = dialogs[np.random.choice(mask_domain, n_samples_per_domain)]
 
 
+        if method == 'random':
+            df_samples = knowledge_base.knowledge[knowledge_base.knowledge.domain != domain]
+            negatives = df_samples.loc[np.random.choice(df_samples.index, n_samples_per_domain)]
 
-        for _ in range(n_samples_per_domain):
-            dialog, label = dialogs[random.choice(mask_domain)]
-            true_domain = label['domain']
-            entity_id = str(label['entity_id'])
-            doc_id = str(label['doc_id'])
-            pos = knowledge_preprocessing(knowledge_base[true_domain, entity_id, doc_id])
+            for (dialog, label), (_, neg) in zip(dialog_samples, negatives.iterrows()):
+                true_domain = label['domain']
+                entity_id = str(label['entity_id'])
+                doc_id = str(label['doc_id'])
+                pos = knowledge_preprocessing(knowledge_base[true_domain, entity_id, doc_id])
+                neg = knowledge_preprocessing(neg)
+                triplets.append((dialog, pos, neg))
 
-            if method == 'random':
-                # implement random in-domain in-entity
-                neg_domains = list(knowledge_base.domains)
-                neg_domains.remove(domain)
-                neg_choices = np.unique(
-                    [knowledge_preprocessing(row) for d in neg_domains for ind, row in dfs[d].iterrows()]).tolist()
+        else:
+            kb_domain = knowledge_base.knowledge[knowledge_base.knowledge.domain == domain]
 
-            elif method == 'in-domain':
-                neg_choices = np.unique([knowledge_preprocessing(row) for ind, row in dfs[true_domain].iterrows()]).tolist()
+            for dialog, label in dialog_samples:
 
+                true_domain = label['domain']
+                entity_id = str(label['entity_id'])
+                doc_id = str(label['doc_id'])
+                pos = knowledge_preprocessing(knowledge_base[true_domain, entity_id, doc_id])
+
+                if method == 'in-domain':
+                    if entity_id == '*':
+                        continue
+                    df_samples = kb_domain[kb_domain.entity_id != entity_id]
+                elif method == 'in-entity':
+                    df_samples = kb_domain[kb_domain.entity_id == entity_id]
+
+                df_samples = df_samples[fields].drop_duplicates()
+                neg = knowledge_preprocessing(df_samples.loc[np.random.choice(df_samples.index)])
+
+                triplets.append((dialog, pos, neg))
+
+    return triplets
+
+class CondensedDialogsDataset(DialogsDataset):
+    def __init__(self, *args, **kwargs):
+
+        super(CondensedDialogsDataset, self).__init__(selection_turns_only=False, *args, **kwargs)
+        differences = np.diff([len(sample) for sample in self.dialogs])
+        break_points = np.argwhere(differences < 0)
+        self.dialogs = [dialog_to_turns(self.dialogs[i]) for i in break_points.flatten()]
+        labels = []
+        turn_labels = [self.labels[0]]
+        for i, diff in enumerate(differences):
+
+            if diff < 0:
+                labels.append(turn_labels)
+                turn_labels = [self.labels[i+1]]
             else:
-                neg_choices = np.unique([knowledge_preprocessing(row) for ind, row in dfs[true_domain][dfs[true_domain].entity_id == entity_id].iterrows()]).tolist()
+                turn_labels += [self.labels[i + 1]] * (diff // 2)
 
-
-            n_negatives = min(n_negatives, len(neg_choices))
-            neg = np.random.choice(neg_choices, n_negatives, replace=False).tolist()
-
-            samples.append(
-                {
-                    'anchor': dialog,
-                    'pos': pos,
-                    'neg': neg
-                }
-            )
-
-    return samples
-
-if __name__ == '__main__':
-    kb = KnowledgeBase('./DSTC9/data')
-    from utils import *
-    d_data = DialogsDataset('./DSTC9/data', 'train', selection_turns_only=True, preprocessing_fn=ConcatenateDialogContext())
-
-    x = sample_dialog_triplets(d_data, kb)
-
-    from utils import print_triplet
-
-    for triplet in x[:10]:
-        anchor = triplet['anchor']
-        pos = triplet['pos']
-        neg = triplet['neg'][0]
-        print_triplet(anchor, pos, neg)
+        self.labels = labels
