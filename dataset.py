@@ -208,60 +208,27 @@ def test_break_points(ds, break_points):
         start_ind = break_points[i - 1] + 1
         end_ind = break_points[i]
         first_user_turn = ds.dialogs[end_ind][0]['text']
-        print(f'checking from {start_ind}-{end_ind}')
         for ind in range(start_ind, end_ind):
             d = ds.dialogs[ind][0]['text']
             assert d == first_user_turn
 
+
+
 class CondensedDialogsDataset(DialogsDataset):
     def __init__(self, *args, **kwargs):
+        super(CondensedDialogsDataset, self).__init__(selection_turns_only=True, *args, **kwargs)
 
-        super(CondensedDialogsDataset, self).__init__(selection_turns_only=False, *args, **kwargs)
-        lengths = [len(sample) for sample in self.dialogs]
-
-        if args[1] != 'test' and kwargs.get('dataset') != 'test':
-            differences = np.diff(lengths)
-            break_points = np.argwhere(differences <= 0).flatten()
-
-            test_break_points(self, break_points)
-
-            self.dialogs = [dialog_to_turns(self.dialogs[i]) for i in break_points]
-            labels = []
-            turn_labels = []
-            for i, diff in enumerate(differences):
-                if diff == 0:
-                    continue
-                elif diff < 0 or i == 0:
-                    labels.append(turn_labels)
-                    turn_labels = []
-
-                turn_labels += [{'target': False}] * ((lengths[i]) // 2 - 1)
-                turn_labels.append(self.labels[i + 1])
-            labels.pop(0)
-            self.labels = labels
-        else:
-            break_points = range(len(self.dialogs))
-            test_break_points(self, break_points)
-
-            self.dialogs = [dialog_to_turns(self.dialogs[i]) for i in break_points]
-            labels = []
-            for i, l in enumerate(lengths):
-                turn_labels = []
-                turn_labels += [{'target': False}] * ((lengths[i]) // 2)
-                turn_labels.append(self.labels[i])
-                labels.append(turn_labels)
-            self.labels = labels
-
-
-
+        dialogs = [dialog_to_turns(d) for d in self.dialogs]
+        self.dialogs = dialogs
+        labels = []
+        for d, l in zip(self.dialogs, self.labels):
+            turn_labels = [{'target':False}] * (len(d) - 1)
+            turn_labels.append(l)
+            labels.append(turn_labels)
+        self.labels = labels
 
 if __name__ == '__main__':
-    ds = CondensedDialogsDataset('./DSTC9/data_eval', 'test')
+    ds = CondensedDialogsDataset('./DSTC9/data', 'val')
 
-    for dialog, label in ds:
-        try:
-            assert len(dialog) == len(label)
-        except:
-            pass
-
-
+    for i, (dialog, label) in enumerate(ds):
+        assert len(dialog) == len(label)
