@@ -55,7 +55,7 @@ class HeadedEncoder(nn.Module):
         elif isinstance(heads, list):
             self.heads = {key:LinearHead(self.hidden_size, self.hidden_size, device=device) for key in heads}
 
-    def forward(self, input, output=None):
+    def forward(self, input, *args, output=None, **kwargs):
         input_encoding = self.sentence_encoder(input)
 
         if output is not None:
@@ -64,7 +64,7 @@ class HeadedEncoder(nn.Module):
             elif isinstance(output, list):
                 return {key:self.heads[key](input_encoding) for key in output}
             else:
-                return self.heads[output](input_encoding)
+                return self.heads[output](input_encoding, *args, **kwargs)
 
         return input_encoding
 
